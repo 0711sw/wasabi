@@ -50,6 +50,7 @@ fn setup_console_layer() -> Box<dyn Layer<Registry> + Send + Sync + 'static> {
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
 
     tracing_subscriber::fmt::layer()
+        .with_span_events(FmtSpan::NEW)
         .event_format(crate::logging::console::ConsoleDebugFormat)
         .with_filter(filter)
         .boxed()
