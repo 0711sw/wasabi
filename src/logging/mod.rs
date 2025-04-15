@@ -1,7 +1,7 @@
+use tracing_subscriber::fmt::format::FmtSpan;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{EnvFilter, Layer, Registry};
-use tracing_subscriber::fmt::format::FmtSpan;
 
 #[cfg(feature = "pretty_logs")]
 mod console;
