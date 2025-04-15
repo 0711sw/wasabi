@@ -197,7 +197,7 @@ mod tests {
 
         // Ensure that the table is not created twice...
         dbd_client
-            .create_table(&table_name, |builder| {
+            .create_table(&table_name, |_| {
                 panic!("This should not be called again");
             })
             .await

@@ -240,7 +240,7 @@ fn check_validity(
         }
     }
 
-    if let Some(nbf) = parse_timestamp("nbf", claims)? {
+    if let Some(nbf) = parse_timestamp(CLAIM_NBF, claims)? {
         if nbf >= Utc::now() {
             status_bail!(StatusCode::UNAUTHORIZED, "The given JWT is not yet valid.");
         }

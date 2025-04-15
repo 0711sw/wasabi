@@ -4,7 +4,7 @@ pub mod dynamodb;
 pub mod s3;
 
 #[cfg(test)]
-mod test {
+pub mod test {
     use rand::random;
 
     pub fn test_run_id() -> String {

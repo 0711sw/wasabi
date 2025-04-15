@@ -6,9 +6,8 @@ use opentelemetry_otlp::{SpanExporter, WithExportConfig};
 use opentelemetry_sdk::Resource;
 use opentelemetry_sdk::trace::{RandomIdGenerator, Sampler, SdkTracerProvider};
 use std::env;
-use tracing::{Level, Subscriber};
+use tracing::Subscriber;
 use tracing_opentelemetry::OpenTelemetryLayer;
-use tracing_subscriber::filter::filter_fn;
 use tracing_subscriber::registry::LookupSpan;
 use tracing_subscriber::{EnvFilter, Layer};
 

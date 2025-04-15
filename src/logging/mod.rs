@@ -1,13 +1,7 @@
-use crate::APP_NAME;
-use anyhow::Context;
-use std::env;
-use tracing::{Level, Subscriber};
-use tracing_subscriber::filter::{FilterExt, filter_fn};
-use tracing_subscriber::fmt::format::FmtSpan;
 use tracing_subscriber::layer::SubscriberExt;
-use tracing_subscriber::registry::LookupSpan;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{EnvFilter, Layer, Registry};
+use tracing_subscriber::fmt::format::FmtSpan;
 
 #[cfg(feature = "pretty_logs")]
 mod console;
@@ -51,7 +45,7 @@ fn setup_console_layer() -> Box<dyn Layer<Registry> + Send + Sync + 'static> {
 
     tracing_subscriber::fmt::layer()
         .with_span_events(FmtSpan::NEW)
-        .event_format(crate::logging::console::ConsoleDebugFormat)
+        .event_format(console::ConsoleDebugFormat)
         .with_filter(filter)
         .boxed()
 }

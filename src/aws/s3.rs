@@ -1,6 +1,4 @@
 use anyhow::Context;
-use aws_sdk_s3::client::Waiters;
-use aws_sdk_s3::error::SdkError;
 use aws_sdk_s3::types::{BucketLocationConstraint, CreateBucketConfiguration};
 use aws_sdk_s3::{Client, config};
 use std::env;
