@@ -1,11 +1,9 @@
-use crate::aws_rdy;
 use anyhow::Context;
 use aws_sdk_s3::client::Waiters;
 use aws_sdk_s3::error::SdkError;
 use aws_sdk_s3::types::{BucketLocationConstraint, CreateBucketConfiguration};
 use aws_sdk_s3::{Client, config};
 use std::env;
-use tracing::log::__private_api::loc;
 
 #[derive(Clone, Debug)]
 pub struct S3Client {
@@ -37,7 +35,7 @@ impl S3Client {
         }
     }
 
-    #[tracing::instrument(skip(self), err)]
+    #[tracing::instrument(skip(self), err(Display))]
     pub async fn does_bucket_exist(&self, name: &str) -> anyhow::Result<bool> {
         let effective_name = self.effective_name(name);
 
@@ -60,7 +58,7 @@ impl S3Client {
             Err(e) => Err(e).context(format!("Cannot access bucket '{}'", effective_name)),
         }
     }
-    #[tracing::instrument(skip(self), err)]
+    #[tracing::instrument(skip(self), err(Display))]
     pub async fn create_bucket(&self, name: &str) -> anyhow::Result<()> {
         let effective_name = self.effective_name(name);
 
@@ -103,20 +101,38 @@ impl S3Client {
             Ok(())
         }
     }
+
+    #[tracing::instrument(level = "debug", skip(self), ret(Debug), err(Display))]
+    pub async fn delete_object(&self, bucket: &str, key: &str) -> anyhow::Result<()> {
+        let effective_bucket = self.effective_name(bucket);
+
+        let _ = self
+            .client
+            .delete_object()
+            .bucket(&effective_bucket)
+            .key(key)
+            .send()
+            .await
+            .with_context(|| {
+                format!(
+                    "Failed to delete '{}' from bucket '{}'",
+                    key, &effective_bucket
+                )
+            })?;
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use crate::aws::s3::S3Client;
     use crate::aws::test::test_run_id;
-    use crate::aws_rdy;
-    use rand::random;
     use std::env;
 
     #[tokio::test]
+    #[ignore]
     async fn does_bucket_exist_detects_nonexistent_bucket() {
-        aws_rdy!();
-
         unsafe {
             env::set_var("S3_BUCKET_SUFFIX", "wasabi-test.0711sw.net");
         }
@@ -128,9 +144,8 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore]
     async fn create_bucket_creates_bucket_if_non_existent() {
-        aws_rdy!();
-
         unsafe {
             env::set_var("S3_BUCKET_SUFFIX", "wasabi-test.0711sw.net");
         }

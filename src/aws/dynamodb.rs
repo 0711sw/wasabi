@@ -115,7 +115,6 @@ impl DynamoClient {
 mod tests {
     use crate::aws::dynamodb::DynamoClient;
     use crate::aws::test::test_run_id;
-    use crate::aws_rdy;
     use aws_sdk_dynamodb::types::{
         AttributeDefinition, BillingMode, KeySchemaElement, KeyType, ScalarAttributeType,
     };
@@ -124,9 +123,8 @@ mod tests {
     use tokio::time::sleep;
 
     #[tokio::test]
+    #[ignore]
     async fn does_table_exists_detects_nonexistent_table() {
-        aws_rdy!();
-
         unsafe {
             env::set_var("DYNAMO_TABLE_PREFIX", "wasabi-test");
         }
@@ -138,9 +136,8 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore]
     async fn create_table_actually_creates_a_table() {
-        aws_rdy!();
-
         unsafe {
             env::set_var("DYNAMO_TABLE_PREFIX", "wasabi-test");
         }
