@@ -32,13 +32,15 @@ pub struct S3Client {
 #[derive(Debug)]
 pub enum BucketName {
     FullyQualifiedName(String),
-    Prefix(&'static str),
+    ConstPrefix(&'static str),
+    Prefix(String)
 }
 
-impl Display for BucketName {
+impl<'a> Display for BucketName {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             BucketName::FullyQualifiedName(name) => write!(f, "{}", name),
+            BucketName::ConstPrefix(prefix) => write!(f, "{}...", prefix),
             BucketName::Prefix(prefix) => write!(f, "{}...", prefix),
         }
     }
@@ -87,6 +89,7 @@ impl S3Client {
     pub fn effective_name(&self, bucket: &BucketName) -> String {
         match bucket {
             BucketName::FullyQualifiedName(name) => name.clone(),
+            BucketName::ConstPrefix(prefix) => format!("{}.{}", prefix, self.bucket_suffix),
             BucketName::Prefix(prefix) => format!("{}.{}", prefix, self.bucket_suffix),
         }
     }
@@ -560,6 +563,7 @@ impl CachedObject {
 mod tests {
     use crate::aws::s3::S3Client;
     use crate::aws::test::test_run_id;
+    use crate::aws::s3::BucketName;
     use std::env;
 
     #[tokio::test]
@@ -570,9 +574,8 @@ mod tests {
         }
 
         let s3_client = S3Client::from_env().await.unwrap();
-        let bucket_name = "non-existent-bucket";
 
-        assert!(!s3_client.does_bucket_exist(bucket_name).await.unwrap());
+        assert!(!s3_client.does_bucket_exist(&BucketName::ConstPrefix("non-existent-bucket")).await.unwrap());
     }
 
     #[tokio::test]
@@ -583,7 +586,7 @@ mod tests {
         }
 
         let s3_client = S3Client::from_env().await.unwrap();
-        let bucket_name = format!("test-bucket-{}", test_run_id());
+        let bucket_name = BucketName::Prefix(format!("test-bucket-{}", test_run_id()));
 
         // Ensure the bucket does not exist before creating it...
         if s3_client.does_bucket_exist(&bucket_name).await.unwrap() {
