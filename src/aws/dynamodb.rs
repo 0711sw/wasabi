@@ -21,7 +21,7 @@ use tokio::time::sleep;
 #[derive(Clone, Debug)]
 pub struct DynamoClient {
     pub client: Client,
-    table_suffix: String,
+    table_prefix: String,
 }
 
 impl DynamoClient {
@@ -30,17 +30,17 @@ impl DynamoClient {
         let config = aws_config::load_from_env().await;
         let client = Client::new(&config);
 
-        let table_suffix = env::var("DYNAMO_TABLE_SUFFIX")
-            .context("No DYNAMO_TABLE_SUFFIX provided in environment")?;
+        let table_prefix = env::var("DYNAMO_TABLE_PREFIX")
+            .context("No DYNAMO_TABLE_PREFIX provided in environment")?;
 
         Ok(DynamoClient {
             client,
-            table_suffix,
+            table_prefix,
         })
     }
 
     pub fn effective_name(&self, table: &str) -> String {
-        format!("{}-{}", table, self.table_suffix)
+        format!("{}-{}", self.table_prefix, table)
     }
 
     pub async fn does_table_exist(&self, name: &str) -> anyhow::Result<bool> {
@@ -270,15 +270,22 @@ impl DynamoClient {
     }
 }
 
+const ID_ALPHABET: [char; 36] = [
+    '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I',
+    'J', 'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z',
+];
+
+pub fn generate_id() -> String {
+    nanoid::format(nanoid::rngs::default, &ID_ALPHABET, 32)
+}
+
 #[cfg(test)]
 mod tests {
     use crate::aws::dynamodb::DynamoClient;
     use crate::aws::test::test_run_id;
-    use anyhow::Context;
     use aws_sdk_dynamodb::types::{
         AttributeDefinition, BillingMode, KeySchemaElement, KeyType, ScalarAttributeType,
     };
-    use aws_sdk_s3::error::SdkError;
     use std::env;
     use std::time::Duration;
     use tokio::time::sleep;
@@ -333,7 +340,7 @@ mod tests {
         // Create the table...
         dbd_client
             .create_table(&table_name, |builder| {
-                builder
+                Ok(builder
                     .attribute_definitions(
                         AttributeDefinition::builder()
                             .attribute_name("PK")
@@ -348,7 +355,7 @@ mod tests {
                             .build()
                             .unwrap(),
                     )
-                    .billing_mode(BillingMode::PayPerRequest)
+                    .billing_mode(BillingMode::PayPerRequest))
             })
             .await
             .unwrap();
@@ -373,13 +380,4 @@ mod tests {
             .await
             .unwrap();
     }
-}
-
-const ID_ALPHABET: [char; 36] = [
-    '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I',
-    'J', 'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z',
-];
-
-pub fn generate_id() -> String {
-    nanoid::format(nanoid::rngs::default, &ID_ALPHABET, 32)
 }
