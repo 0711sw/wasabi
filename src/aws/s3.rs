@@ -395,7 +395,7 @@ impl S3Client {
         CachedObject {
             client: self.clone(),
             inner: Arc::new(CachedObjectInner {
-                bucket: bucket,
+                bucket,
                 object_key: object_key.to_owned(),
                 state: RwLock::new(CachedObjectState {
                     content: None,
