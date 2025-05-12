@@ -124,7 +124,7 @@ pub fn into_rejection(err: anyhow::Error) -> Rejection {
     }
 }
 
-pub async fn handle_rejection(err: Rejection) -> Result<impl Reply, Rejection> {
+async fn handle_rejection(err: Rejection) -> Result<impl Reply, Rejection> {
     if let Some(err) = err.find::<ApiError>() {
         Ok(reply::with_status(reply::json(&err), err.status))
     } else {
@@ -138,7 +138,7 @@ macro_rules! routes {
         $route
     };
     [$route:expr, $($rest:expr),+] => {
-        $route.or(routes![$($rest),+])
+        warp::Filter::or($route, routes![$($rest),+])
     };
 }
 

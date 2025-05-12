@@ -1,12 +1,68 @@
+use crate::web::error::ResultExt;
+use crate::{KB, MB};
 use anyhow::Context;
+use aws_sdk_s3::primitives::{AggregatedBytes, ByteStream};
+use aws_sdk_s3::types::CompletedMultipartUpload;
+use aws_sdk_s3::types::CompletedPart;
 use aws_sdk_s3::types::{BucketLocationConstraint, CreateBucketConfiguration};
 use aws_sdk_s3::{Client, config};
+use bytes::{Buf, Bytes};
+use futures_util::Stream;
+use futures_util::TryStreamExt;
 use std::env;
+use std::fmt::Display;
+use std::io::Error;
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
+use tokio::sync::Notify;
+use tokio::sync::RwLock;
+use tokio::time::Duration;
+use tokio::time::Instant;
+
+const MULTIPART_UPLOAD_IDEAL_PART_SIZE: usize = 16 * MB;
+const MULTIPART_UPLOAD_BUFFER_SIZE: usize = MULTIPART_UPLOAD_IDEAL_PART_SIZE + (16 * KB);
 
 #[derive(Clone, Debug)]
 pub struct S3Client {
     pub client: Client,
-    bucket_suffix: Option<String>,
+    bucket_suffix: String,
+}
+
+#[derive(Debug)]
+pub enum BucketName {
+    FullyQualifiedName(String),
+    Prefix(&'static str),
+}
+
+impl Display for BucketName {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            BucketName::FullyQualifiedName(name) => write!(f, "{}", name),
+            BucketName::Prefix(prefix) => write!(f, "{}...", prefix),
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct CachedObject {
+    client: S3Client,
+    inner: Arc<CachedObjectInner>,
+}
+
+struct CachedObjectInner {
+    minimum_cache_duration: Duration,
+    bucket: BucketName,
+    object_key: String,
+    state: RwLock<CachedObjectState>,
+    fetching: AtomicBool,
+    notify: Notify,
+}
+
+struct CachedObjectState {
+    content: Option<Arc<Vec<u8>>>,
+    etag: String,
+    last_fetched: Instant,
 }
 
 impl S3Client {
@@ -19,23 +75,25 @@ impl S3Client {
             .build();
 
         let client = Client::from_conf(s3_config);
+        let bucket_suffix =
+            env::var("S3_BUCKET_SUFFIX").context("No S3_BUCKET_SUFFIX provided in environment")?;
 
         Ok(S3Client {
             client,
-            bucket_suffix: env::var("S3_BUCKET_SUFFIX").ok(),
+            bucket_suffix,
         })
     }
 
-    pub fn effective_name(&self, bucket: &str) -> String {
-        match &self.bucket_suffix {
-            Some(suffix) => format!("{}.{}", bucket, suffix),
-            None => bucket.to_owned(),
+    pub fn effective_name(&self, bucket: &BucketName) -> String {
+        match bucket {
+            BucketName::FullyQualifiedName(name) => name.clone(),
+            BucketName::Prefix(prefix) => format!("{}.{}", prefix, self.bucket_suffix),
         }
     }
 
     #[tracing::instrument(skip(self), err(Display))]
-    pub async fn does_bucket_exist(&self, name: &str) -> anyhow::Result<bool> {
-        let effective_name = self.effective_name(name);
+    pub async fn does_bucket_exist(&self, bucket: &BucketName) -> anyhow::Result<bool> {
+        let effective_name = self.effective_name(bucket);
 
         match self
             .client
@@ -57,7 +115,7 @@ impl S3Client {
         }
     }
     #[tracing::instrument(skip(self), err(Display))]
-    pub async fn create_bucket(&self, name: &str) -> anyhow::Result<()> {
+    pub async fn create_bucket(&self, name: &BucketName) -> anyhow::Result<()> {
         let effective_name = self.effective_name(name);
 
         if self.does_bucket_exist(name).await? {
@@ -101,7 +159,7 @@ impl S3Client {
     }
 
     #[tracing::instrument(level = "debug", skip(self), ret(Debug), err(Display))]
-    pub async fn delete_object(&self, bucket: &str, key: &str) -> anyhow::Result<()> {
+    pub async fn delete_object(&self, bucket: &BucketName, key: &str) -> anyhow::Result<()> {
         let effective_bucket = self.effective_name(bucket);
 
         let _ = self
@@ -119,6 +177,382 @@ impl S3Client {
             })?;
 
         Ok(())
+    }
+
+    pub async fn put_object(
+        &self,
+        bucket: &BucketName,
+        object_key: &str,
+        body: Vec<u8>,
+    ) -> anyhow::Result<()> {
+        let effective_bucket = self.effective_name(bucket);
+
+        self.client
+            .put_object()
+            .bucket(effective_bucket)
+            .key(object_key)
+            .body(ByteStream::from(body))
+            .send()
+            .await
+            .with_context(|| {
+                format!(
+                    "Failed to store object '{}' in bucket '{}'",
+                    object_key, bucket
+                )
+            })?;
+
+        Ok(())
+    }
+
+    pub async fn get_object(&self, bucket: &BucketName, object_key: &str) -> anyhow::Result<Bytes> {
+        let effective_bucket = self.effective_name(bucket);
+
+        let result = self
+            .client
+            .get_object()
+            .bucket(effective_bucket)
+            .key(object_key)
+            .send()
+            .await
+            .with_context(|| {
+                format!(
+                    "Failed to fetch object '{}' from bucket '{}'",
+                    object_key, bucket
+                )
+            })?;
+
+        let data = result
+            .body
+            .collect()
+            .await
+            .with_context(|| {
+                format!(
+                    "Failed to read object '{}' from bucket '{}'",
+                    object_key, bucket
+                )
+            })?
+            .into_bytes();
+
+        Ok(data)
+    }
+
+    pub async fn multipart_upload(
+        &self,
+        bucket: &BucketName,
+        object_key: &str,
+        stream: impl Stream<Item = Result<impl Buf, Error>> + Unpin + Send,
+    ) -> anyhow::Result<()> {
+        let effective_bucket = self.effective_name(bucket);
+
+        let upload_id = self
+            .client
+            .create_multipart_upload()
+            .bucket(&effective_bucket)
+            .key(object_key)
+            .send()
+            .await
+            .with_context(|| {
+                format!(
+                    "Failed to create multipart upload for '{}' in bucket '{}'",
+                    object_key, bucket
+                )
+            })?
+            .upload_id()
+            .with_context(|| {
+                format!(
+                    "Failed to receive upload id for a multipart upload of '{}' in bucket '{}'",
+                    object_key, bucket
+                )
+            })?
+            .to_owned();
+
+        if let Err(err) = self
+            .perform_multipart_upload(&effective_bucket, object_key, &upload_id, stream)
+            .await
+        {
+            if let Err(abort_error) = self
+                .client
+                .abort_multipart_upload()
+                .bucket(&effective_bucket)
+                .key(object_key)
+                .upload_id(upload_id)
+                .send()
+                .await
+            {
+                tracing::error!(
+                    "Failed to abort multipart upload of '{}' in bucket '{}': {:#}",
+                    object_key,
+                    bucket,
+                    abort_error
+                );
+            }
+
+            Err(err)
+        } else {
+            Ok(())
+        }
+    }
+
+    async fn perform_multipart_upload(
+        &self,
+        effective_bucket: &str,
+        key: &str,
+        upload_id: &str,
+        mut stream: impl Stream<Item = Result<impl Buf, Error>> + Unpin + Send,
+    ) -> anyhow::Result<()> {
+        let mut buffer = Vec::with_capacity(MULTIPART_UPLOAD_BUFFER_SIZE);
+        let mut part_number = 1;
+        let mut uploaded_parts = Vec::new();
+
+        while let Some(chunk) = stream
+            .try_next()
+            .await
+            .context("Failed to read body")
+            .mark_client_error()?
+        {
+            buffer.extend_from_slice(chunk.chunk());
+
+            if buffer.len() >= MULTIPART_UPLOAD_IDEAL_PART_SIZE {
+                let upload_result = self
+                    .client
+                    .upload_part()
+                    .bucket(effective_bucket)
+                    .key(key)
+                    .upload_id(upload_id)
+                    .part_number(part_number)
+                    .body(ByteStream::from(buffer.clone()))
+                    .send()
+                    .await?;
+
+                dbg!(part_number);
+                dbg!(&upload_result);
+
+                uploaded_parts.push(
+                    CompletedPart::builder()
+                        .e_tag(upload_result.e_tag.unwrap_or_default())
+                        .part_number(part_number)
+                        .build(),
+                );
+                part_number += 1;
+                buffer.clear();
+            }
+        }
+
+        if !buffer.is_empty() {
+            let upload_result = self
+                .client
+                .upload_part()
+                .bucket(effective_bucket)
+                .key(key)
+                .upload_id(upload_id)
+                .part_number(part_number)
+                .body(ByteStream::from(buffer.clone()))
+                .send()
+                .await
+                .with_context(|| {
+                    format!(
+                        "Failed to upload a part of a multipart upload of '{}' in bucket '{}'",
+                        key, effective_bucket,
+                    )
+                })?;
+
+            uploaded_parts.push(
+                CompletedPart::builder()
+                    .e_tag(upload_result.e_tag.unwrap_or_default())
+                    .part_number(part_number)
+                    .build(),
+            );
+        }
+
+        self.client
+            .complete_multipart_upload()
+            .bucket(effective_bucket)
+            .key(key)
+            .upload_id(upload_id)
+            .multipart_upload(
+                CompletedMultipartUpload::builder()
+                    .set_parts(Some(uploaded_parts))
+                    .build(),
+            )
+            .send()
+            .await
+            .with_context(|| {
+                format!(
+                    "Failed to complete multipart upload of '{}' in bucket '{}'",
+                    key, effective_bucket,
+                )
+            })?;
+
+        Ok(())
+    }
+
+    pub fn cached_object(
+        &self,
+        bucket: BucketName,
+        object_key: &str,
+        minimum_cache_duration: Duration,
+    ) -> CachedObject {
+        CachedObject {
+            client: self.clone(),
+            inner: Arc::new(CachedObjectInner {
+                bucket: bucket,
+                object_key: object_key.to_owned(),
+                state: RwLock::new(CachedObjectState {
+                    content: None,
+                    etag: "".to_owned(),
+                    last_fetched: Instant::now(),
+                }),
+                minimum_cache_duration,
+                fetching: AtomicBool::new(false),
+                notify: Notify::new(),
+            }),
+        }
+    }
+}
+
+impl CachedObject {
+    pub async fn fetch_cached(&self) -> anyhow::Result<Arc<Vec<u8>>> {
+        if let Some(content) = self.fetch_from_inner_cache().await {
+            return Ok(content);
+        }
+
+        self.fetch().await
+    }
+
+    async fn fetch_from_inner_cache(&self) -> Option<Arc<Vec<u8>>> {
+        let state = self.inner.state.read().await;
+
+        match &state.content {
+            Some(content) if state.last_fetched.elapsed() < self.inner.minimum_cache_duration => {
+                Some(content.clone())
+            }
+            _ => None,
+        }
+    }
+
+    pub async fn fetch(&self) -> anyhow::Result<Arc<Vec<u8>>> {
+        if self.inner.fetching.swap(true, Ordering::SeqCst) {
+            self.inner.notify.notified().await;
+
+            let state = self.inner.state.read().await;
+            if let Some(content) = &state.content {
+                return Ok(content.clone());
+            } else {
+                anyhow::bail!(
+                    "Waited for another task to fetch {} from S3 bucket {}, but it failed",
+                    self.inner.object_key,
+                    self.inner.bucket
+                );
+            }
+        }
+
+        self.fetch_and_cache().await
+    }
+
+    async fn fetch_and_cache(&self) -> anyhow::Result<Arc<Vec<u8>>> {
+        let (content, next_etag) = self.perform_fetch().await;
+
+        let mut state = self.inner.state.write().await;
+        state.etag = next_etag;
+        state.content = content;
+        state.last_fetched = Instant::now();
+
+        self.inner.fetching.store(false, Ordering::SeqCst);
+        self.inner.notify.notify_waiters();
+
+        if let Some(content) = &state.content {
+            Ok(content.clone())
+        } else {
+            Err(anyhow::anyhow!(
+                "Failed to fetch {} from S3 bucket {}",
+                self.inner.object_key,
+                self.inner.bucket
+            ))
+        }
+    }
+
+    async fn perform_fetch(&self) -> (Option<Arc<Vec<u8>>>, String) {
+        if let Some((cached_content, cached_etag)) = self.fetch_from_cache().await {
+            let new_etag = self.fetch_etag_from_s3().await;
+            if new_etag == cached_etag {
+                return (Some(cached_content), cached_etag);
+            }
+        }
+
+        self.fetch_from_s3().await
+    }
+
+    async fn fetch_from_cache(&self) -> Option<(Arc<Vec<u8>>, String)> {
+        let state = self.inner.state.read().await;
+        match &state.content {
+            Some(content) if !state.etag.is_empty() => Some((content.clone(), state.etag.clone())),
+
+            _ => None,
+        }
+    }
+
+    async fn fetch_etag_from_s3(&self) -> String {
+        let effective_bucket = self.client.effective_name(&self.inner.bucket);
+
+        let result = self
+            .client
+            .client
+            .head_object()
+            .bucket(effective_bucket)
+            .key(&self.inner.object_key)
+            .send()
+            .await;
+
+        match result {
+            Ok(result) => result.e_tag.unwrap_or_default(),
+            Err(err) => {
+                tracing::error!(
+                    "Failed to check the etag of object '{}' in bucket '{}': {:#}",
+                    self.inner.object_key,
+                    self.inner.bucket,
+                    err
+                );
+
+                "".to_string()
+            }
+        }
+    }
+
+    async fn fetch_from_s3(&self) -> (Option<Arc<Vec<u8>>>, String) {
+        let effective_bucket = self.client.effective_name(&self.inner.bucket);
+
+        let result = self
+            .client
+            .client
+            .get_object()
+            .bucket(effective_bucket)
+            .key(&self.inner.object_key)
+            .send()
+            .await;
+
+        match result {
+            Ok(result) => {
+                let etag = result.e_tag().unwrap_or_default().to_owned();
+                let data = result
+                    .body
+                    .collect()
+                    .await
+                    .map(AggregatedBytes::to_vec)
+                    .unwrap_or_default();
+
+                (Some(Arc::new(data)), etag)
+            }
+            Err(err) => {
+                tracing::error!(
+                    "Failed to read object '{}' from bucket '{}': {:#}",
+                    self.inner.object_key,
+                    self.inner.bucket,
+                    err
+                );
+
+                (None, "".to_string())
+            }
+        }
     }
 }
 

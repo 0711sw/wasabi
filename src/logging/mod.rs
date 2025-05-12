@@ -4,7 +4,7 @@ use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{EnvFilter, Layer, Registry};
 
 #[cfg(feature = "pretty_logs")]
-mod console;
+mod pretty;
 
 #[cfg(feature = "open_telemetry")]
 mod otel;
@@ -39,28 +39,25 @@ pub fn setup_tracing() {
     tracing::info!("Tracing initialized successfully [reporting to console only]");
 }
 
-#[cfg(feature = "pretty_logs")]
 fn setup_console_layer() -> Box<dyn Layer<Registry> + Send + Sync + 'static> {
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
 
     tracing_subscriber::fmt::layer()
         .with_span_events(FmtSpan::NEW)
-        .event_format(console::ConsoleDebugFormat)
+        .event_format(setup_console_format())
         .with_filter(filter)
         .boxed()
 }
 
+#[cfg(feature = "pretty_logs")]
+fn setup_console_format() -> pretty::PrettyConsoleLogFormat {
+    pretty::PrettyConsoleLogFormat {}
+}
+
 #[cfg(not(feature = "pretty_logs"))]
-fn setup_console_layer() -> Box<dyn Layer<Registry> + Send + Sync + 'static> {
-    let format = tracing_subscriber::fmt::format()
+fn setup_console_format()
+-> tracing_subscriber::fmt::format::Format<tracing_subscriber::fmt::format::Full, ()> {
+    tracing_subscriber::fmt::format()
         .with_ansi(false)
-        .without_time();
-
-    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
-
-    let layer = tracing_subscriber::fmt::layer()
-        .event_format(format)
-        .with_filter(filter);
-
-    layer.boxed()
+        .without_time()
 }

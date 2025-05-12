@@ -23,6 +23,10 @@ pub static NODE_ID: LazyLock<String> =
 pub static TASK_ID: LazyLock<String> =
     LazyLock::new(|| env::var("TASK_ID").unwrap_or("local".to_string()));
 
+pub const KB: usize = 1024;
+pub const MB: usize = 1024 * KB;
+pub const GB: usize = 1024 * MB;
+
 pub async fn await_termination(purpose: &str) {
     let ctrl_c = ctrl_c();
     if let Ok(mut sig_hup) = signal(SignalKind::hangup()) {

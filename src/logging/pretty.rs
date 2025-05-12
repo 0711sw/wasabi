@@ -4,7 +4,7 @@ use tracing_subscriber::fmt::format::Writer;
 use tracing_subscriber::fmt::{FmtContext, FormatEvent, FormatFields, FormattedFields};
 use tracing_subscriber::registry::LookupSpan;
 
-pub struct ConsoleDebugFormat;
+pub struct PrettyConsoleLogFormat;
 
 macro_rules! styled {
     ($writer:expr, $style:expr, $block:block) => {
@@ -15,7 +15,7 @@ macro_rules! styled {
     };
 }
 
-impl ConsoleDebugFormat {
+impl PrettyConsoleLogFormat {
     fn format_timestamp(writer: &mut Writer) -> std::fmt::Result {
         styled!(writer, Style::new().dimmed(), {
             write!(writer, "{} ", chrono::offset::Local::now().format("%T%.3f"))?;
@@ -97,7 +97,7 @@ impl ConsoleDebugFormat {
         Ok(())
     }
 }
-impl<S, N> FormatEvent<S, N> for ConsoleDebugFormat
+impl<S, N> FormatEvent<S, N> for PrettyConsoleLogFormat
 where
     S: Subscriber + for<'a> LookupSpan<'a>,
     N: for<'a> FormatFields<'a> + 'static,
