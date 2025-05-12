@@ -33,7 +33,7 @@ pub struct S3Client {
 pub enum BucketName {
     FullyQualifiedName(String),
     ConstPrefix(&'static str),
-    Prefix(String)
+    Prefix(String),
 }
 
 impl<'a> Display for BucketName {
@@ -561,9 +561,9 @@ impl CachedObject {
 
 #[cfg(test)]
 mod tests {
+    use crate::aws::s3::BucketName;
     use crate::aws::s3::S3Client;
     use crate::aws::test::test_run_id;
-    use crate::aws::s3::BucketName;
     use std::env;
 
     #[tokio::test]
@@ -575,7 +575,12 @@ mod tests {
 
         let s3_client = S3Client::from_env().await.unwrap();
 
-        assert!(!s3_client.does_bucket_exist(&BucketName::ConstPrefix("non-existent-bucket")).await.unwrap());
+        assert!(
+            !s3_client
+                .does_bucket_exist(&BucketName::ConstPrefix("non-existent-bucket"))
+                .await
+                .unwrap()
+        );
     }
 
     #[tokio::test]
