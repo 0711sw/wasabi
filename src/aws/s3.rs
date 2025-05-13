@@ -36,7 +36,7 @@ pub enum BucketName {
     Prefix(String),
 }
 
-impl<'a> Display for BucketName {
+impl Display for BucketName {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             BucketName::FullyQualifiedName(name) => write!(f, "{}", name),
