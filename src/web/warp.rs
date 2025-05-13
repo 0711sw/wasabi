@@ -105,31 +105,30 @@ pub async fn body_as_string(
     Ok(data_as_string)
 }
 pub fn into_response<S: Serialize>(result: anyhow::Result<S>) -> Result<impl Reply, Rejection> {
-    match result.and_then(|data| serde_json::to_vec(&data).context("Failed to serialize JSON data"))
-    {
-        Ok(data) => {
-            let span = Span::current();
-            span.record("http.content_length", data.len());
-            span.record("http.status", 200);
-
-            let mut res = Response::new(data.into());
-            res.headers_mut()
-                .insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
-            Ok(res)
-        }
-        Err(err) => Err(into_rejection(err)),
-    }
+    into_response_with_status(result.map(|data| (StatusCode::OK, data)))
 }
 
 pub fn into_response_with_status<S: Serialize>(
-    result: anyhow::Result<(StatusCode, S)>,
+    response: anyhow::Result<(StatusCode, S)>,
 ) -> Result<impl Reply, Rejection> {
-    match result {
+    let response = response.and_then(|(status_code, data)| {
+        match serde_json::to_vec(&data).context("Failed to serialize data") {
+            Ok(data) => Ok((status_code, data)),
+            Err(err) => Err(err),
+        }
+    });
+
+    match response {
         Ok((status, data)) => {
             let span = Span::current();
+            span.record("http.content_length", data.len());
             span.record("http.status", status.as_u16());
 
-            Ok(reply::with_status(reply::json(&data), status))
+            let mut res = Response::new(data.into());
+            *res.status_mut() = status;
+            res.headers_mut()
+                .insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+            Ok(res)
         }
         Err(err) => Err(into_rejection(err)),
     }
