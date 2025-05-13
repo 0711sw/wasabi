@@ -11,8 +11,11 @@ use std::net::SocketAddr;
 use std::str::FromStr;
 use tokio_util::bytes::Buf;
 use tokio_util::bytes::BufMut;
-use warp::http::StatusCode;
+use tracing::Span;
+use warp::http::{HeaderValue, StatusCode};
 use warp::{Filter, Rejection, Reply, http, reply};
+use warp::http::header::CONTENT_TYPE;
+use warp::reply::Response;
 
 pub fn content_length_header() -> impl Filter<Extract = (i64,), Error = Rejection> + Clone {
     warp::header::header::<i64>(http::header::CONTENT_LENGTH.as_str())
@@ -102,8 +105,17 @@ pub async fn body_as_string(
     Ok(data_as_string)
 }
 pub fn into_response<S: Serialize>(result: anyhow::Result<S>) -> Result<impl Reply, Rejection> {
-    match result {
-        Ok(data) => Ok(reply::json(&data)),
+    match result.and_then(|data| serde_json::to_vec(&data).context("Failed to serialize JSON data")) {
+        Ok(data) => {
+            let span = Span::current();
+            span.record("http.content_length", data.len());
+            span.record("http.status", 200);
+            
+            let mut res = Response::new(data.into());
+            res.headers_mut()
+                .insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+            Ok(res)
+        },
         Err(err) => Err(into_rejection(err)),
     }
 }
@@ -112,7 +124,12 @@ pub fn into_response_with_status<S: Serialize>(
     result: anyhow::Result<(StatusCode, S)>,
 ) -> Result<impl Reply, Rejection> {
     match result {
-        Ok((status, data)) => Ok(reply::with_status(reply::json(&data), status)),
+        Ok((status, data)) => {
+            let span = Span::current();
+            span.record("http.status", status.as_u16());
+            
+            Ok(reply::with_status(reply::json(&data), status))
+        },
         Err(err) => Err(into_rejection(err)),
     }
 }
@@ -126,6 +143,9 @@ pub fn into_rejection(err: anyhow::Error) -> Rejection {
 
 async fn handle_rejection(err: Rejection) -> Result<impl Reply, Rejection> {
     if let Some(err) = err.find::<ApiError>() {
+        let span = Span::current();
+        span.record("http.status", err.status.as_u16());
+        
         Ok(reply::with_status(reply::json(&err), err.status))
     } else {
         Err(err)
