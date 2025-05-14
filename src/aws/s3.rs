@@ -10,7 +10,7 @@ use bytes::{Buf, Bytes};
 use futures_util::Stream;
 use futures_util::TryStreamExt;
 use std::env;
-use std::fmt::Display;
+use std::fmt::{Debug, Display};
 use std::io::Error;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
@@ -94,7 +94,7 @@ impl S3Client {
         }
     }
 
-    #[tracing::instrument(skip(self), err(Display))]
+    #[tracing::instrument(skip(self), ret, err(Display))]
     pub async fn does_bucket_exist(&self, bucket: &BucketName) -> anyhow::Result<bool> {
         let effective_name = self.effective_name(bucket);
 
@@ -182,6 +182,7 @@ impl S3Client {
         Ok(())
     }
 
+    #[tracing::instrument(level = "debug", skip(self, body), err(Display))]
     pub async fn put_object(
         &self,
         bucket: &BucketName,
@@ -207,6 +208,7 @@ impl S3Client {
         Ok(())
     }
 
+    #[tracing::instrument(level = "debug", skip(self), err(Display))]
     pub async fn get_object(&self, bucket: &BucketName, object_key: &str) -> anyhow::Result<Bytes> {
         let effective_bucket = self.effective_name(bucket);
 
@@ -239,6 +241,7 @@ impl S3Client {
         Ok(data)
     }
 
+    #[tracing::instrument(level = "debug", skip(self, stream), err(Display))]
     pub async fn multipart_upload(
         &self,
         bucket: &BucketName,
@@ -327,9 +330,6 @@ impl S3Client {
                     .send()
                     .await?;
 
-                dbg!(part_number);
-                dbg!(&upload_result);
-
                 uploaded_parts.push(
                     CompletedPart::builder()
                         .e_tag(upload_result.e_tag.unwrap_or_default())
@@ -389,6 +389,7 @@ impl S3Client {
         Ok(())
     }
 
+    #[tracing::instrument(level = "debug", ret, err(Display))]
     pub fn cached_object(
         &self,
         bucket: BucketName,
@@ -413,7 +414,15 @@ impl S3Client {
     }
 }
 
+impl Debug for CachedObject {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} in {}", self.inner.object_key, self.inner.bucket)
+    }
+}
+
 impl CachedObject {
+
+    #[tracing::instrument(level = "debug", err(Display))]
     pub async fn fetch_cached(&self) -> anyhow::Result<Arc<Vec<u8>>> {
         if let Some(content) = self.fetch_from_inner_cache().await {
             return Ok(content);
@@ -433,6 +442,7 @@ impl CachedObject {
         }
     }
 
+    #[tracing::instrument(level = "debug", err(Display))]
     pub async fn fetch(&self) -> anyhow::Result<Arc<Vec<u8>>> {
         if self.inner.fetching.swap(true, Ordering::SeqCst) {
             self.inner.notify.notified().await;
@@ -452,6 +462,7 @@ impl CachedObject {
         self.fetch_and_cache().await
     }
 
+    #[tracing::instrument(level = "debug", err(Display))]
     async fn fetch_and_cache(&self) -> anyhow::Result<Arc<Vec<u8>>> {
         let (content, next_etag) = self.perform_fetch().await;
 
@@ -474,6 +485,7 @@ impl CachedObject {
         }
     }
 
+    #[tracing::instrument(level = "debug", err(Display))]
     async fn perform_fetch(&self) -> (Option<Arc<Vec<u8>>>, String) {
         if let Some((cached_content, cached_etag)) = self.fetch_from_cache().await {
             let new_etag = self.fetch_etag_from_s3().await;
@@ -485,15 +497,16 @@ impl CachedObject {
         self.fetch_from_s3().await
     }
 
-    async fn fetch_from_cache(&self) -> Option<(Arc<Vec<u8>>, String)> {
+    #[tracing::instrument(level = "debug", err(Display))]
+    async fn load_from_cache(&self) -> Option<(Arc<Vec<u8>>, String)> {
         let state = self.inner.state.read().await;
         match &state.content {
             Some(content) if !state.etag.is_empty() => Some((content.clone(), state.etag.clone())),
-
             _ => None,
         }
     }
 
+    #[tracing::instrument(level = "debug", ret, err(Display))]
     async fn fetch_etag_from_s3(&self) -> String {
         let effective_bucket = self.client.effective_name(&self.inner.bucket);
 
@@ -521,6 +534,7 @@ impl CachedObject {
         }
     }
 
+    #[tracing::instrument(level = "debug", err(Display))]
     async fn fetch_from_s3(&self) -> (Option<Arc<Vec<u8>>>, String) {
         let effective_bucket = self.client.effective_name(&self.inner.bucket);
 

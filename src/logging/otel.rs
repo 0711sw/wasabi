@@ -45,12 +45,31 @@ fn setup_open_telemetry(endpoint: String) -> anyhow::Result<SdkTracerProvider> {
         .with_resource(
             Resource::builder_empty()
                 .with_attributes([
-                    KeyValue::new("cloud.provider", "aws"),
-                    KeyValue::new("cloud.platform", "aws_ecs"),
-                    KeyValue::new("service.name", APP_NAME.clone()),
-                    KeyValue::new("service.namespace", CLUSTER_ID.clone()),
-                    KeyValue::new("service.instance.id", TASK_ID.clone()),
-                    KeyValue::new("service.version", APP_VERSION.clone()),
+                    KeyValue::new(
+                        opentelemetry_semantic_conventions::resource::CLOUD_PROVIDER,
+                        "aws",
+                    ),
+                    KeyValue::new(
+                        opentelemetry_semantic_conventions::resource::CLOUD_PLATFORM,
+                        "aws_ecs",
+                    ),
+                    KeyValue::new("aws.service", CLUSTER_ID.clone()),
+                    KeyValue::new(
+                        opentelemetry_semantic_conventions::resource::SERVICE_NAME,
+                        APP_NAME.clone(),
+                    ),
+                    KeyValue::new(
+                        opentelemetry_semantic_conventions::resource::SERVICE_NAMESPACE,
+                        CLUSTER_ID.clone(),
+                    ),
+                    KeyValue::new(
+                        opentelemetry_semantic_conventions::resource::SERVICE_INSTANCE_ID,
+                        TASK_ID.clone(),
+                    ),
+                    KeyValue::new(
+                        opentelemetry_semantic_conventions::resource::SERVICE_VERSION,
+                        APP_VERSION.clone(),
+                    ),
                 ])
                 .build(),
         )

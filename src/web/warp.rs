@@ -120,7 +120,10 @@ pub fn into_response_with_status<S: Serialize>(
 
     match response {
         Ok((status, data)) => {
-            Span::current().record("http.status_code", status.as_u16());
+            Span::current().record(
+                opentelemetry_semantic_conventions::trace::HTTP_RESPONSE_STATUS_CODE,
+                status.as_u16(),
+            );
 
             let mut res = Response::new(data.into());
             *res.status_mut() = status;
@@ -141,7 +144,10 @@ pub fn into_rejection(err: anyhow::Error) -> Rejection {
 
 async fn handle_rejection(err: Rejection) -> Result<impl Reply, Rejection> {
     if let Some(err) = err.find::<ApiError>() {
-        Span::current().record("http.status_code", err.status.as_u16());
+        Span::current().record(
+            opentelemetry_semantic_conventions::trace::HTTP_RESPONSE_STATUS_CODE,
+            err.status.as_u16(),
+        );
         Ok(reply::with_status(reply::json(&err), err.status))
     } else {
         Err(err)
