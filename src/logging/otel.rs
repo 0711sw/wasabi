@@ -45,6 +45,8 @@ fn setup_open_telemetry(endpoint: String) -> anyhow::Result<SdkTracerProvider> {
         .with_resource(
             Resource::builder_empty()
                 .with_attributes([
+                    KeyValue::new("cloud.provider", "aws"),
+                    KeyValue::new("cloud.platform", "aws_ecs"),
                     KeyValue::new("service.name", APP_NAME.clone()),
                     KeyValue::new("service.namespace", CLUSTER_ID.clone()),
                     KeyValue::new("service.instance.id", TASK_ID.clone()),
