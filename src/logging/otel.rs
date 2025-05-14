@@ -47,6 +47,7 @@ fn setup_open_telemetry(endpoint: String) -> anyhow::Result<SdkTracerProvider> {
                 .with_attributes([
                     KeyValue::new("service.name", APP_NAME.clone()),
                     KeyValue::new("namespace", CLUSTER_ID.clone()),
+                    KeyValue::new("span.kind", "server"),
                 ])
                 .build(),
         )

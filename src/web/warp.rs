@@ -121,7 +121,7 @@ pub fn into_response_with_status<S: Serialize>(
     match response {
         Ok((status, data)) => {
             let span = Span::current();
-            
+
             // Note that this is a special field as defined by AWS X-Ray...
             span.record("http.response.content_length", data.len());
             record_status(status);
@@ -136,7 +136,7 @@ pub fn into_response_with_status<S: Serialize>(
     }
 }
 
-fn record_status(status: StatusCode)  {
+fn record_status(status: StatusCode) {
     let span = Span::current();
     if status.is_server_error() {
         span.record("fault", true);
