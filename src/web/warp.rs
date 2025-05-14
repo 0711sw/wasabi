@@ -143,7 +143,7 @@ fn record_status(status: StatusCode) {
     } else if status.is_server_error() {
         span.record("error", true);
     }
-    span.record("http.status_code", status.as_u16());
+    span.record("http.response.status_code", status.as_u16());
 }
 
 pub fn into_rejection(err: anyhow::Error) -> Rejection {
