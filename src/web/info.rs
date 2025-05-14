@@ -14,7 +14,7 @@ pub fn get_info_route() -> BoxedFilter<(impl warp::Reply,)> {
     skip_all,
     fields(http.method = "GET",
            http.url = "/info/v1",
-           http.status_code = tracing::field::Empty)
+           http.response.status_code = tracing::field::Empty)
 )]
 async fn handle_get_info() -> Result<impl warp::Reply, warp::Rejection> {
     Ok(warp::reply::json(&json!({

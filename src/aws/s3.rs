@@ -389,7 +389,7 @@ impl S3Client {
         Ok(())
     }
 
-    #[tracing::instrument(level = "debug", ret)]
+    #[tracing::instrument(level = "debug", skip(self), ret)]
     pub fn cached_object(
         &self,
         bucket: BucketName,
