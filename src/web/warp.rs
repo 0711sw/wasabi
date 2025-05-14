@@ -121,8 +121,10 @@ pub fn into_response_with_status<S: Serialize>(
     match response {
         Ok((status, data)) => {
             let span = Span::current();
-            span.record("http.content_length", data.len());
-            span.record("http.status", status.as_u16());
+            
+            // Note that this is a special field as defined by AWS X-Ray...
+            span.record("http.response.content_length", data.len());
+            record_status(status);
 
             let mut res = Response::new(data.into());
             *res.status_mut() = status;
@@ -134,6 +136,16 @@ pub fn into_response_with_status<S: Serialize>(
     }
 }
 
+fn record_status(status: StatusCode)  {
+    let span = Span::current();
+    if status.is_server_error() {
+        span.record("fault", true);
+    } else if status.is_server_error() {
+        span.record("error", true);
+    }
+    span.record("http.status_code", status.as_u16());
+}
+
 pub fn into_rejection(err: anyhow::Error) -> Rejection {
     match err.downcast_ref::<ApiError>() {
         Some(api_error) => api_error.clone().into(),
@@ -143,9 +155,7 @@ pub fn into_rejection(err: anyhow::Error) -> Rejection {
 
 async fn handle_rejection(err: Rejection) -> Result<impl Reply, Rejection> {
     if let Some(err) = err.find::<ApiError>() {
-        let span = Span::current();
-        span.record("http.status", err.status.as_u16());
-
+        record_status(err.status);
         Ok(reply::with_status(reply::json(&err), err.status))
     } else {
         Err(err)

@@ -15,7 +15,6 @@ async fn handle_get_info() -> Result<impl warp::Reply, warp::Rejection> {
             "app": crate::APP_NAME.clone(),
             "version": crate::APP_VERSION.clone(),
             "clusterId": crate::CLUSTER_ID.clone(),
-            "nodeId": crate::NODE_ID.clone(),
-            "podId": crate::TASK_ID.clone(),
+            "taskId": crate::TASK_ID.clone(),
     })))
 }

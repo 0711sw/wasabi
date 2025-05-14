@@ -1,4 +1,4 @@
-use crate::APP_NAME;
+use crate::{APP_NAME, CLUSTER_ID};
 use anyhow::Context;
 use opentelemetry::KeyValue;
 use opentelemetry::trace::TracerProvider;
@@ -44,7 +44,10 @@ fn setup_open_telemetry(endpoint: String) -> anyhow::Result<SdkTracerProvider> {
         .with_max_attributes_per_span(16)
         .with_resource(
             Resource::builder_empty()
-                .with_attributes([KeyValue::new("service.name", APP_NAME.clone())])
+                .with_attributes([
+                    KeyValue::new("service.name", APP_NAME.clone()),
+                    KeyValue::new("namespace", CLUSTER_ID.clone()),
+                ])
                 .build(),
         )
         .build();

@@ -17,9 +17,6 @@ pub static APP_VERSION: LazyLock<String> =
 pub static CLUSTER_ID: LazyLock<String> =
     LazyLock::new(|| env::var("CLUSTER_ID").unwrap_or("local".to_string()));
 
-pub static NODE_ID: LazyLock<String> =
-    LazyLock::new(|| env::var("NODE_ID").unwrap_or("localhost".to_string()));
-
 pub static TASK_ID: LazyLock<String> =
     LazyLock::new(|| env::var("TASK_ID").unwrap_or("local".to_string()));
 
