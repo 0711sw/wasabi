@@ -389,7 +389,7 @@ impl S3Client {
         Ok(())
     }
 
-    #[tracing::instrument(level = "debug", ret, err(Display))]
+    #[tracing::instrument(level = "debug", ret)]
     pub fn cached_object(
         &self,
         bucket: BucketName,
@@ -421,7 +421,6 @@ impl Debug for CachedObject {
 }
 
 impl CachedObject {
-
     #[tracing::instrument(level = "debug", err(Display))]
     pub async fn fetch_cached(&self) -> anyhow::Result<Arc<Vec<u8>>> {
         if let Some(content) = self.fetch_from_inner_cache().await {
@@ -485,9 +484,9 @@ impl CachedObject {
         }
     }
 
-    #[tracing::instrument(level = "debug", err(Display))]
+    #[tracing::instrument(level = "debug")]
     async fn perform_fetch(&self) -> (Option<Arc<Vec<u8>>>, String) {
-        if let Some((cached_content, cached_etag)) = self.fetch_from_cache().await {
+        if let Some((cached_content, cached_etag)) = self.load_from_cache().await {
             let new_etag = self.fetch_etag_from_s3().await;
             if new_etag == cached_etag {
                 return (Some(cached_content), cached_etag);
@@ -497,7 +496,7 @@ impl CachedObject {
         self.fetch_from_s3().await
     }
 
-    #[tracing::instrument(level = "debug", err(Display))]
+    #[tracing::instrument(level = "debug")]
     async fn load_from_cache(&self) -> Option<(Arc<Vec<u8>>, String)> {
         let state = self.inner.state.read().await;
         match &state.content {
@@ -506,7 +505,7 @@ impl CachedObject {
         }
     }
 
-    #[tracing::instrument(level = "debug", ret, err(Display))]
+    #[tracing::instrument(level = "debug", ret)]
     async fn fetch_etag_from_s3(&self) -> String {
         let effective_bucket = self.client.effective_name(&self.inner.bucket);
 
@@ -534,7 +533,7 @@ impl CachedObject {
         }
     }
 
-    #[tracing::instrument(level = "debug", err(Display))]
+    #[tracing::instrument(level = "debug")]
     async fn fetch_from_s3(&self) -> (Option<Arc<Vec<u8>>>, String) {
         let effective_bucket = self.client.effective_name(&self.inner.bucket);
 
