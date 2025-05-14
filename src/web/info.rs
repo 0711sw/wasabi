@@ -10,13 +10,18 @@ pub fn get_info_route() -> BoxedFilter<(impl warp::Reply,)> {
 }
 
 #[tracing::instrument(level = "debug",
-    target = "/info/v1",
     name = "GET /info/v1",
     skip_all,
     fields(http.request.method = "GET",
-           url.path = "/info/v1",
-           http.response.status_code = 200,
-           http.response.content_length = 0)
+           http.url = "1",
+           http.method = "2",
+           http.status_code = 404,
+           http.content_length = 5,
+              http.route = "/info/v112",
+              http.response.status_code = 405,
+           http.response.content_length = 8,
+           span.kind = "server",
+              url.path = "/info/v1")
 )]
 async fn handle_get_info() -> Result<impl warp::Reply, warp::Rejection> {
     Ok(warp::reply::json(&json!({
