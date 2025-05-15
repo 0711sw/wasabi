@@ -15,7 +15,7 @@ use std::str::FromStr;
 use std::task::Poll;
 use tokio_util::bytes::Buf;
 use tokio_util::bytes::BufMut;
-use tracing::{debug_span, Instrument, Span};
+use tracing::{Instrument, Span, debug_span};
 use warp::http::header::CONTENT_TYPE;
 use warp::http::{HeaderValue, StatusCode};
 use warp::reply::Response;
@@ -241,7 +241,8 @@ where
             let status = response.status().as_u16();
             Span::current().record("http.status_code", status as i64);
             Ok(response)
-        }.instrument(span);
+        }
+        .instrument(span);
 
         Box::pin(fut)
     }
