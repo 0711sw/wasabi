@@ -221,12 +221,17 @@ where
         let method = req.method().clone();
         let path = req.uri().path().to_string();
 
+        // Note that we initialize the status with 500 but overwrite it later.
+        // 500 (internal server error) seems to be a good fallback in case the code below
+        // which records the actual status never runs. Also, it enforces int as type for
+        // http.status_code as otherwise (field::Empty) rust chooses a str, which isn't understood
+        // by processors like adot/awsxrayexporter.
         let span = debug_span!(
             "http_request",
             aws.service = crate::CLUSTER_ID.clone(),
             http.method = %method,
             http.url = %path,
-            http.status_code = tracing::field::Empty,
+            http.status_code = 500,
         );
 
         let mut inner = self.inner.clone();
@@ -234,8 +239,8 @@ where
         let fut = async move {
             let _enter = span.enter();
             let response = inner.call(req).await?;
-            let status = response.status();
-            span.record("http.status_code", status.as_u16());
+            let status = response.status().as_u16();
+            span.record("http.status_code", status);
             Ok(response)
         };
 
