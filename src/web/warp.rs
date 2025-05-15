@@ -235,7 +235,7 @@ where
             let _enter = span.enter();
             let response = inner.call(req).await?;
             let status = response.status();
-            span.record("http.status_code", &status.as_u16());
+            span.record("http.status_code", status.as_u16());
             Ok(response)
         };
 

@@ -1,4 +1,4 @@
-use crate::{APP_NAME, APP_VERSION, CLUSTER_ID, TASK_ID};
+use crate::{APP_VERSION, CLUSTER_ID, TASK_ID};
 use anyhow::Context;
 use opentelemetry::KeyValue;
 use opentelemetry::trace::TracerProvider;
