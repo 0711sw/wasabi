@@ -9,13 +9,7 @@ pub fn get_info_route() -> BoxedFilter<(impl warp::Reply,)> {
         .boxed()
 }
 
-#[tracing::instrument(level = "debug",
-    name = "GET /info/v1",
-    skip_all,
-    fields(http.method = "GET",
-           http.url = "/info/v1",
-           http.response.status_code = tracing::field::Empty)
-)]
+#[tracing::instrument(level = "debug", name = "GET /info/v1", skip_all)]
 async fn handle_get_info() -> Result<impl warp::Reply, warp::Rejection> {
     Ok(warp::reply::json(&json!({
             "app": crate::APP_NAME.clone(),

@@ -2,20 +2,27 @@ use crate::client_bail;
 use crate::web::error::{ApiError, ResultExt};
 use anyhow::{Context, anyhow};
 use futures_util::{Stream, StreamExt, TryStreamExt};
+use http::Request;
+use hyper::Server;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use std::convert::Infallible;
 use std::env;
 use std::error::Error;
 use std::net::SocketAddr;
+use std::pin::Pin;
 use std::str::FromStr;
+use std::task::Poll;
 use tokio_util::bytes::Buf;
 use tokio_util::bytes::BufMut;
-use tracing::Span;
+use tracing::debug_span;
 use warp::http::header::CONTENT_TYPE;
 use warp::http::{HeaderValue, StatusCode};
 use warp::reply::Response;
 use warp::{Filter, Rejection, Reply, http, reply};
+
+use tower::{Service, ServiceBuilder};
+use warp::hyper::Body;
 
 pub fn content_length_header() -> impl Filter<Extract = (i64,), Error = Rejection> + Clone {
     warp::header::header::<i64>(http::header::CONTENT_LENGTH.as_str())
@@ -120,11 +127,6 @@ pub fn into_response_with_status<S: Serialize>(
 
     match response {
         Ok((status, data)) => {
-            Span::current().record(
-                opentelemetry_semantic_conventions::trace::HTTP_RESPONSE_STATUS_CODE,
-                status.as_u16(),
-            );
-
             let mut res = Response::new(data.into());
             *res.status_mut() = status;
             res.headers_mut()
@@ -144,10 +146,6 @@ pub fn into_rejection(err: anyhow::Error) -> Rejection {
 
 async fn handle_rejection(err: Rejection) -> Result<impl Reply, Rejection> {
     if let Some(err) = err.find::<ApiError>() {
-        Span::current().record(
-            opentelemetry_semantic_conventions::trace::HTTP_RESPONSE_STATUS_CODE,
-            err.status.as_u16(),
-        );
         Ok(reply::with_status(reply::json(&err), err.status))
     } else {
         Err(err)
@@ -179,17 +177,70 @@ where
 
     let filter = routes.boxed().recover(handle_rejection);
 
-    let (addr, server) = warp::serve(filter)
-        .try_bind_with_graceful_shutdown(bind_address, async {
-            crate::await_termination("webserver").await;
-        })
-        .with_context(|| format!("Failed to bind HTTP server to {}", bind_address))?;
+    let svc = warp::service(filter);
+    let traced_svc = ServiceBuilder::new()
+        .layer_fn(|inner| TracingMiddleware { inner })
+        .service(svc);
 
-    tracing::info!("Running HTTP server at effective address {}", addr);
-    server.await;
+    let server = Server::bind(&bind_address).serve(hyper::service::make_service_fn(|_| {
+        let svc = traced_svc.clone();
+        async move { Ok::<_, Infallible>(svc) }
+    }));
+
+    tracing::info!(
+        "Running HTTP server at effective address {}",
+        server.local_addr()
+    );
+    server
+        .await
+        .with_context(|| format!("Failed to bind HTTP server to {}", bind_address))?;
     tracing::info!("HTTP Server has terminated...");
 
     Ok(())
+}
+
+#[derive(Clone)]
+struct TracingMiddleware<S> {
+    inner: S,
+}
+
+impl<S> Service<Request<Body>> for TracingMiddleware<S>
+where
+    S: Service<Request<Body>, Response = Response, Error = Infallible> + Clone + Send + 'static,
+    S::Future: Send + 'static,
+{
+    type Response = S::Response;
+    type Error = S::Error;
+    type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send>>;
+
+    fn poll_ready(&mut self, cx: &mut std::task::Context<'_>) -> Poll<Result<(), Self::Error>> {
+        self.inner.poll_ready(cx)
+    }
+
+    fn call(&mut self, req: Request<Body>) -> Self::Future {
+        let method = req.method().clone();
+        let path = req.uri().path().to_string();
+
+        let span = debug_span!(
+            "http_request",
+            aws.service = crate::CLUSTER_ID.clone(),
+            http.method = %method,
+            http.url = %path,
+            http.status_code = tracing::field::Empty,
+        );
+
+        let mut inner = self.inner.clone();
+
+        let fut = async move {
+            let _enter = span.enter();
+            let response = inner.call(req).await?;
+            let status = response.status();
+            span.record("http.status_code", &status.as_u16());
+            Ok(response)
+        };
+
+        Box::pin(fut)
+    }
 }
 
 #[cfg(test)]
