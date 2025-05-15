@@ -239,7 +239,7 @@ where
         let fut = async move {
             let response = inner.call(req).await?;
             let status = response.status().as_u16();
-            Span::current().record("http.status_code", status);
+            Span::current().record("http.status_code", status as i64);
             Ok(response)
         }.instrument(span);
 
