@@ -15,7 +15,7 @@ use std::str::FromStr;
 use std::task::Poll;
 use tokio_util::bytes::Buf;
 use tokio_util::bytes::BufMut;
-use tracing::debug_span;
+use tracing::{debug_span, Instrument, Span};
 use warp::http::header::CONTENT_TYPE;
 use warp::http::{HeaderValue, StatusCode};
 use warp::reply::Response;
@@ -231,18 +231,17 @@ where
             aws.service = crate::CLUSTER_ID.clone(),
             http.method = %method,
             http.url = %path,
-            http.status_code = 500,
+            http.status_code = tracing::field::Empty,
         );
 
         let mut inner = self.inner.clone();
 
         let fut = async move {
-            let _enter = span.enter();
             let response = inner.call(req).await?;
             let status = response.status().as_u16();
-            span.record("http.status_code", status);
+            Span::current().record("http.status_code", status);
             Ok(response)
-        };
+        }.instrument(span);
 
         Box::pin(fut)
     }
