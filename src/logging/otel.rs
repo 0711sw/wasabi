@@ -4,6 +4,7 @@ use opentelemetry::KeyValue;
 use opentelemetry::trace::TracerProvider;
 use opentelemetry_otlp::{SpanExporter, WithExportConfig};
 use opentelemetry_sdk::Resource;
+use opentelemetry_sdk::propagation::TraceContextPropagator;
 use opentelemetry_sdk::trace::{RandomIdGenerator, Sampler, SdkTracerProvider};
 use std::env;
 use tracing::Subscriber;
@@ -71,6 +72,7 @@ fn setup_open_telemetry(endpoint: String) -> anyhow::Result<SdkTracerProvider> {
         .build();
 
     opentelemetry::global::set_tracer_provider(tracer_provider.clone());
+    opentelemetry::global::set_text_map_propagator(TraceContextPropagator::new());
 
     Ok(tracer_provider)
 }

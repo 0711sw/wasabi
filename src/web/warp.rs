@@ -3,7 +3,7 @@ use crate::web::error::{ApiError, ResultExt};
 use anyhow::{Context, anyhow};
 use futures_util::{Stream, StreamExt, TryStreamExt};
 use http::Request;
-use hyper::Server;
+use hyper::{Body, Server};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use std::convert::Infallible;
@@ -22,7 +22,6 @@ use warp::reply::Response;
 use warp::{Filter, Rejection, Reply, http, reply};
 
 use tower::{Service, ServiceBuilder};
-use warp::hyper::Body;
 
 pub fn content_length_header() -> impl Filter<Extract = (i64,), Error = Rejection> + Clone {
     warp::header::header::<i64>(http::header::CONTENT_LENGTH.as_str())
@@ -226,13 +225,16 @@ where
         // which records the actual status never runs. Also, it enforces int as type for
         // http.status_code as otherwise (field::Empty) rust chooses a str, which isn't understood
         // by processors like adot/awsxrayexporter.
-        let span = debug_span!(
+        let mut span = debug_span!(
             "http_request",
             aws.service = crate::CLUSTER_ID.clone(),
             http.method = %method,
             http.url = %path,
             http.status_code = tracing::field::Empty,
         );
+
+        #[cfg(feature = "open_telemetry")]
+        open_telemetry::extract_parent_context(req.headers(), &mut span);
 
         let mut inner = self.inner.clone();
 
@@ -245,6 +247,36 @@ where
         .instrument(span);
 
         Box::pin(fut)
+    }
+}
+
+#[cfg(feature = "open_telemetry")]
+mod open_telemetry {
+    use hyper::http::HeaderMap;
+
+    use opentelemetry::propagation::Extractor;
+    use tracing::Span;
+    use tracing_opentelemetry::OpenTelemetrySpanExt;
+
+    struct HeaderExtractor<'a> {
+        headers: &'a HeaderMap,
+    }
+
+    impl Extractor for HeaderExtractor<'_> {
+        fn get(&self, key: &str) -> Option<&str> {
+            self.headers.get(key).and_then(|value| value.to_str().ok())
+        }
+
+        fn keys(&self) -> Vec<&str> {
+            self.headers.keys().map(|header| header.as_str()).collect()
+        }
+    }
+
+    pub fn extract_parent_context(headers: &HeaderMap, span: &mut Span) {
+        let extractor = HeaderExtractor { headers };
+        let parent_cx =
+            opentelemetry::global::get_text_map_propagator(|prop| prop.extract(&extractor));
+        span.set_parent(parent_cx);
     }
 }
 
