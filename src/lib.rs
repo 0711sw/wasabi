@@ -9,7 +9,7 @@ pub mod logging;
 pub mod web;
 
 pub static APP_NAME: LazyLock<String> =
-    LazyLock::new(|| env::var("APP_NAME").unwrap_or("DBX-CORE".to_string()));
+    LazyLock::new(|| env::var("APP_NAME").unwrap_or("WASABI".to_string()));
 
 pub static APP_VERSION: LazyLock<String> =
     LazyLock::new(|| env::var("APP_VERSION").unwrap_or("DEVELOPMENT-SNAPSHOT-VERSION".to_string()));
