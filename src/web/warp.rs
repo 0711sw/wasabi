@@ -216,15 +216,12 @@ where
         self.inner.poll_ready(cx)
     }
 
+
     fn call(&mut self, req: Request<Body>) -> Self::Future {
         let method = req.method().clone();
         let path = req.uri().path().to_string();
 
-        // Note that we initialize the status with 500 but overwrite it later.
-        // 500 (internal server error) seems to be a good fallback in case the code below
-        // which records the actual status never runs. Also, it enforces int as type for
-        // http.status_code as otherwise (field::Empty) rust chooses a str, which isn't understood
-        // by processors like adot/awsxrayexporter.
+        #[cfg_attr(not(feature = "open_telemetry"), allow(unused_mut))]
         let mut span = debug_span!(
             "http_request",
             aws.service = crate::CLUSTER_ID.clone(),
