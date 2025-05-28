@@ -216,7 +216,6 @@ where
         self.inner.poll_ready(cx)
     }
 
-
     fn call(&mut self, req: Request<Body>) -> Self::Future {
         let method = req.method().clone();
         let path = req.uri().path().to_string();

@@ -48,34 +48,32 @@ impl Display for BucketName {
 }
 
 #[async_trait]
-pub trait CachedObject : Send + Sync {
+pub trait CachedObject: Send + Sync {
     async fn fetch_cached(&self) -> anyhow::Result<Arc<Vec<u8>>>;
 
     async fn fetch(&self) -> anyhow::Result<Arc<Vec<u8>>>;
 }
 
 pub struct StaticCachedObject {
-    content: Vec<u8>
+    content: Vec<u8>,
 }
 
 impl StaticCachedObject {
-    
     pub fn new(content: Vec<u8>) -> Self {
         StaticCachedObject { content }
     }
-    
+
     pub fn from_str(content: &str) -> Self {
         StaticCachedObject {
             content: content.as_bytes().to_vec(),
         }
     }
-    
 }
 
 #[async_trait]
 impl CachedObject for StaticCachedObject {
     async fn fetch_cached(&self) -> anyhow::Result<Arc<Vec<u8>>> {
-       self.fetch().await
+        self.fetch().await
     }
 
     async fn fetch(&self) -> anyhow::Result<Arc<Vec<u8>>> {
