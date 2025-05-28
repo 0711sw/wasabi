@@ -32,12 +32,12 @@ nu-ansi-term = { version = "0.50", optional = true }
 rand = "0.9.0"
 http = "1.3.1"
 tower = "0.5.2"
-hyper = "0.14.32"
-async-trait = "0.1"
+hyper = "0.14"
+async-trait = { version = "0.1", optional = true }
 
 [features]
 default = []
 pretty_logs = ["nu-ansi-term"]
 open_telemetry = ["opentelemetry", "opentelemetry-otlp", "opentelemetry_sdk", "tracing-opentelemetry"]
-aws_s3 = ["aws-config", "aws-sdk-s3"]
+aws_s3 = ["aws-config", "aws-sdk-s3", "async-trait"]
 aws_dynamodb = ["aws-config", "aws-sdk-dynamodb", "serde_dynamo", "nanoid"]
