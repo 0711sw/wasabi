@@ -8,7 +8,10 @@ use aws_sdk_dynamodb::operation::put_item::builders::PutItemFluentBuilder;
 use aws_sdk_dynamodb::operation::query::QueryOutput;
 use aws_sdk_dynamodb::operation::query::builders::QueryFluentBuilder;
 use aws_sdk_dynamodb::operation::update_item::builders::UpdateItemFluentBuilder;
-use aws_sdk_dynamodb::types::{AttributeValue, TableStatus};
+use aws_sdk_dynamodb::types::{
+    AttributeDefinition, AttributeValue, GlobalSecondaryIndex, KeySchemaElement, KeyType,
+    Projection, ProjectionType, ScalarAttributeType, TableStatus,
+};
 use futures_util::{Stream, StreamExt, TryStreamExt};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -101,6 +104,190 @@ impl DynamoClient {
             Ok(())
         }
     }
+
+    pub fn str_attribute(name: &str) -> Result<AttributeDefinition, BuildError> {
+        AttributeDefinition::builder()
+            .attribute_name(name)
+            .attribute_type(ScalarAttributeType::S)
+            .build()
+    }
+
+    pub fn with_hash_index(
+        builder: CreateTableFluentBuilder,
+        hash_attribute: &str,
+    ) -> Result<CreateTableFluentBuilder, BuildError> {
+        Ok(builder.key_schema(
+            KeySchemaElement::builder()
+                .attribute_name(hash_attribute)
+                .key_type(KeyType::Hash)
+                .build()?,
+        ))
+    }
+
+    pub fn with_range_index(
+        builder: CreateTableFluentBuilder,
+        hash_attribute: &str,
+        range_attribute: &str,
+    ) -> Result<CreateTableFluentBuilder, BuildError> {
+        Ok(builder
+            .key_schema(
+                KeySchemaElement::builder()
+                    .attribute_name(hash_attribute)
+                    .key_type(KeyType::Hash)
+                    .build()?,
+            )
+            .key_schema(
+                KeySchemaElement::builder()
+                    .attribute_name(range_attribute)
+                    .key_type(KeyType::Range)
+                    .build()?,
+            ))
+    }
+
+    pub fn replicated_range_index(
+        index_name: &str,
+        hash_attribute: &str,
+        range_attribute: &str,
+    ) -> Result<GlobalSecondaryIndex, BuildError> {
+        GlobalSecondaryIndex::builder()
+            .index_name(index_name)
+            .key_schema(
+                KeySchemaElement::builder()
+                    .attribute_name(hash_attribute)
+                    .key_type(KeyType::Hash)
+                    .build()?,
+            )
+            .key_schema(
+                KeySchemaElement::builder()
+                    .attribute_name(range_attribute)
+                    .key_type(KeyType::Range)
+                    .build()?,
+            )
+            .projection(
+                Projection::builder()
+                    .projection_type(ProjectionType::All)
+                    .build(),
+            )
+            .build()
+    }
+    //
+    // table
+    //     .attribute_definitions(
+    //         AttributeDefinition::builder()
+    //             .attribute_name(FIELD_TENANT_ID)
+    //             .attribute_type(ScalarAttributeType::S)
+    //             .build()?,
+    //     )
+    //     .attribute_definitions(
+    //         AttributeDefinition::builder()
+    //             .attribute_name(FIELD_BLOCK_ID)
+    //             .attribute_type(ScalarAttributeType::S)
+    //             .build()?,
+    //     )
+    //     .attribute_definitions(
+    //         AttributeDefinition::builder()
+    //             .attribute_name(FIELD_VALID_FROM)
+    //             .attribute_type(ScalarAttributeType::S)
+    //             .build()?,
+    //     )
+    //     .attribute_definitions(
+    //         AttributeDefinition::builder()
+    //             .attribute_name(FIELD_VALID_FROM_AND_LAST_CONFIRMED)
+    //             .attribute_type(ScalarAttributeType::S)
+    //             .build()?,
+    //     )
+    //     .attribute_definitions(
+    //         AttributeDefinition::builder()
+    //             .attribute_name(FIELD_CORE_COORDINATES)
+    //             .attribute_type(ScalarAttributeType::S)
+    //             .build()?,
+    //     )
+    //     .attribute_definitions(
+    //         AttributeDefinition::builder()
+    //             .attribute_name(FIELD_TYPED_CORE_COORDINATES)
+    //             .attribute_type(ScalarAttributeType::S)
+    //             .build()?,
+    //     )
+    //     .key_schema(
+    //         KeySchemaElement::builder()
+    //             .attribute_name(FIELD_TENANT_ID)
+    //             .key_type(KeyType::Hash)
+    //             .build()?,
+    //     )
+    //     .key_schema(
+    //         KeySchemaElement::builder()
+    //             .attribute_name(FIELD_BLOCK_ID)
+    //             .key_type(KeyType::Range)
+    //             .build()?,
+    //     )
+    //     .global_secondary_indexes(
+    //         GlobalSecondaryIndex::builder()
+    //             .index_name(INDEX_CORE_COORDINATES)
+    //             .key_schema(
+    //                 KeySchemaElement::builder()
+    //                     .attribute_name(FIELD_CORE_COORDINATES)
+    //                     .key_type(KeyType::Hash)
+    //                     .build()?,
+    //             )
+    //             .key_schema(
+    //                 KeySchemaElement::builder()
+    //                     .attribute_name(FIELD_VALID_FROM_AND_LAST_CONFIRMED)
+    //                     .key_type(KeyType::Range)
+    //                     .build()?,
+    //             )
+    //             .projection(
+    //                 Projection::builder()
+    //                     .projection_type(ProjectionType::All)
+    //                     .build(),
+    //             )
+    //             .build()?,
+    //     )
+    //     .global_secondary_indexes(
+    //         GlobalSecondaryIndex::builder()
+    //             .index_name(INDEX_TYPED_CORE_COORDINATES)
+    //             .key_schema(
+    //                 KeySchemaElement::builder()
+    //                     .attribute_name(FIELD_TYPED_CORE_COORDINATES)
+    //                     .key_type(KeyType::Hash)
+    //                     .build()?,
+    //             )
+    //             .key_schema(
+    //                 KeySchemaElement::builder()
+    //                     .attribute_name(FIELD_VALID_FROM)
+    //                     .key_type(KeyType::Range)
+    //                     .build()?,
+    //             )
+    //             .projection(
+    //                 Projection::builder()
+    //                     .projection_type(ProjectionType::All)
+    //                     .build(),
+    //             )
+    //             .build()?,
+    //     )
+    // .global_secondary_indexes(
+    //     GlobalSecondaryIndex::builder()
+    //         .index_name("TenantAssetLastConfirmedIndex")
+    //         .key_schema(
+    //             KeySchemaElement::builder()
+    //                 .attribute_name("computedTenantIdAndAssetName")
+    //                 .key_type(KeyType::Hash)
+    //                 .build()?,
+    //         )
+    //         .key_schema(
+    //             KeySchemaElement::builder()
+    //                 .attribute_name("lastConfirmed")
+    //                 .key_type(KeyType::Range)
+    //                 .build()?,
+    //         )
+    //         .projection(
+    //             Projection::builder()
+    //                 .projection_type(ProjectionType::All)
+    //                 .build(),
+    //         )
+    //         .build()?,
+    // )
+    // .billing_mode(BillingMode::PayPerRequest)
+    // }
 
     async fn wait_until_table_becomes_active(&self, table_name: &str) -> anyhow::Result<()> {
         let effective_name = self.effective_name(table_name);
