@@ -1,6 +1,7 @@
 use crate::web::error::ResultExt;
 use crate::{KB, MB};
 use anyhow::Context;
+use async_trait::async_trait;
 use aws_sdk_s3::primitives::{AggregatedBytes, ByteStream};
 use aws_sdk_s3::types::CompletedMultipartUpload;
 use aws_sdk_s3::types::CompletedPart;
@@ -46,22 +47,53 @@ impl Display for BucketName {
     }
 }
 
-#[derive(Clone)]
-pub struct CachedObject {
-    client: S3Client,
-    inner: Arc<CachedObjectInner>,
+#[async_trait]
+pub trait CachedObject : Send + Sync {
+    async fn fetch_cached(&self) -> anyhow::Result<Arc<Vec<u8>>>;
+
+    async fn fetch(&self) -> anyhow::Result<Arc<Vec<u8>>>;
 }
 
-struct CachedObjectInner {
+pub struct StaticCachedObject {
+    content: Vec<u8>
+}
+
+impl StaticCachedObject {
+    
+    pub fn new(content: Vec<u8>) -> Self {
+        StaticCachedObject { content }
+    }
+    
+    pub fn from_str(content: &str) -> Self {
+        StaticCachedObject {
+            content: content.as_bytes().to_vec(),
+        }
+    }
+    
+}
+
+#[async_trait]
+impl CachedObject for StaticCachedObject {
+    async fn fetch_cached(&self) -> anyhow::Result<Arc<Vec<u8>>> {
+       self.fetch().await
+    }
+
+    async fn fetch(&self) -> anyhow::Result<Arc<Vec<u8>>> {
+        Ok(Arc::new(self.content.clone()))
+    }
+}
+
+pub struct S3CachedObject {
+    client: S3Client,
     minimum_cache_duration: Duration,
     bucket: BucketName,
     object_key: String,
-    state: RwLock<CachedObjectState>,
+    state: RwLock<S3CachedObjectState>,
     fetching: AtomicBool,
     notify: Notify,
 }
 
-struct CachedObjectState {
+struct S3CachedObjectState {
     content: Option<Arc<Vec<u8>>>,
     etag: String,
     last_fetched: Instant,
@@ -395,34 +427,33 @@ impl S3Client {
         bucket: BucketName,
         object_key: &str,
         minimum_cache_duration: Duration,
-    ) -> CachedObject {
-        CachedObject {
+    ) -> Arc<S3CachedObject> {
+        Arc::new(S3CachedObject {
             client: self.clone(),
-            inner: Arc::new(CachedObjectInner {
-                bucket,
-                object_key: object_key.to_owned(),
-                state: RwLock::new(CachedObjectState {
-                    content: None,
-                    etag: "".to_owned(),
-                    last_fetched: Instant::now(),
-                }),
-                minimum_cache_duration,
-                fetching: AtomicBool::new(false),
-                notify: Notify::new(),
+            bucket,
+            object_key: object_key.to_owned(),
+            state: RwLock::new(S3CachedObjectState {
+                content: None,
+                etag: "".to_owned(),
+                last_fetched: Instant::now(),
             }),
-        }
+            minimum_cache_duration,
+            fetching: AtomicBool::new(false),
+            notify: Notify::new(),
+        })
     }
 }
 
-impl Debug for CachedObject {
+impl Debug for S3CachedObject {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{} in {}", self.inner.object_key, self.inner.bucket)
+        write!(f, "{} in {}", self.object_key, self.bucket)
     }
 }
 
-impl CachedObject {
+#[async_trait]
+impl CachedObject for S3CachedObject {
     #[tracing::instrument(level = "debug", err(Display))]
-    pub async fn fetch_cached(&self) -> anyhow::Result<Arc<Vec<u8>>> {
+    async fn fetch_cached(&self) -> anyhow::Result<Arc<Vec<u8>>> {
         if let Some(content) = self.fetch_from_inner_cache().await {
             return Ok(content);
         }
@@ -430,11 +461,33 @@ impl CachedObject {
         self.fetch().await
     }
 
+    #[tracing::instrument(level = "debug", err(Display))]
+    async fn fetch(&self) -> anyhow::Result<Arc<Vec<u8>>> {
+        if self.fetching.swap(true, Ordering::SeqCst) {
+            self.notify.notified().await;
+
+            let state = self.state.read().await;
+            if let Some(content) = &state.content {
+                return Ok(content.clone());
+            } else {
+                anyhow::bail!(
+                    "Waited for another task to fetch {} from S3 bucket {}, but it failed",
+                    self.object_key,
+                    self.bucket
+                );
+            }
+        }
+
+        self.fetch_and_cache().await
+    }
+}
+
+impl S3CachedObject {
     async fn fetch_from_inner_cache(&self) -> Option<Arc<Vec<u8>>> {
-        let state = self.inner.state.read().await;
+        let state = self.state.read().await;
 
         match &state.content {
-            Some(content) if state.last_fetched.elapsed() < self.inner.minimum_cache_duration => {
+            Some(content) if state.last_fetched.elapsed() < self.minimum_cache_duration => {
                 Some(content.clone())
             }
             _ => None,
@@ -442,44 +495,24 @@ impl CachedObject {
     }
 
     #[tracing::instrument(level = "debug", err(Display))]
-    pub async fn fetch(&self) -> anyhow::Result<Arc<Vec<u8>>> {
-        if self.inner.fetching.swap(true, Ordering::SeqCst) {
-            self.inner.notify.notified().await;
-
-            let state = self.inner.state.read().await;
-            if let Some(content) = &state.content {
-                return Ok(content.clone());
-            } else {
-                anyhow::bail!(
-                    "Waited for another task to fetch {} from S3 bucket {}, but it failed",
-                    self.inner.object_key,
-                    self.inner.bucket
-                );
-            }
-        }
-
-        self.fetch_and_cache().await
-    }
-
-    #[tracing::instrument(level = "debug", err(Display))]
     async fn fetch_and_cache(&self) -> anyhow::Result<Arc<Vec<u8>>> {
         let (content, next_etag) = self.perform_fetch().await;
 
-        let mut state = self.inner.state.write().await;
+        let mut state = self.state.write().await;
         state.etag = next_etag;
         state.content = content;
         state.last_fetched = Instant::now();
 
-        self.inner.fetching.store(false, Ordering::SeqCst);
-        self.inner.notify.notify_waiters();
+        self.fetching.store(false, Ordering::SeqCst);
+        self.notify.notify_waiters();
 
         if let Some(content) = &state.content {
             Ok(content.clone())
         } else {
             Err(anyhow::anyhow!(
                 "Failed to fetch {} from S3 bucket {}",
-                self.inner.object_key,
-                self.inner.bucket
+                self.object_key,
+                self.bucket
             ))
         }
     }
@@ -498,7 +531,7 @@ impl CachedObject {
 
     #[tracing::instrument(level = "debug")]
     async fn load_from_cache(&self) -> Option<(Arc<Vec<u8>>, String)> {
-        let state = self.inner.state.read().await;
+        let state = self.state.read().await;
         match &state.content {
             Some(content) if !state.etag.is_empty() => Some((content.clone(), state.etag.clone())),
             _ => None,
@@ -507,14 +540,14 @@ impl CachedObject {
 
     #[tracing::instrument(level = "debug", ret)]
     async fn fetch_etag_from_s3(&self) -> String {
-        let effective_bucket = self.client.effective_name(&self.inner.bucket);
+        let effective_bucket = self.client.effective_name(&self.bucket);
 
         let result = self
             .client
             .client
             .head_object()
             .bucket(effective_bucket)
-            .key(&self.inner.object_key)
+            .key(&self.object_key)
             .send()
             .await;
 
@@ -523,8 +556,8 @@ impl CachedObject {
             Err(err) => {
                 tracing::error!(
                     "Failed to check the etag of object '{}' in bucket '{}': {:#}",
-                    self.inner.object_key,
-                    self.inner.bucket,
+                    self.object_key,
+                    self.bucket,
                     err
                 );
 
@@ -535,14 +568,14 @@ impl CachedObject {
 
     #[tracing::instrument(level = "debug")]
     async fn fetch_from_s3(&self) -> (Option<Arc<Vec<u8>>>, String) {
-        let effective_bucket = self.client.effective_name(&self.inner.bucket);
+        let effective_bucket = self.client.effective_name(&self.bucket);
 
         let result = self
             .client
             .client
             .get_object()
             .bucket(effective_bucket)
-            .key(&self.inner.object_key)
+            .key(&self.object_key)
             .send()
             .await;
 
@@ -561,8 +594,8 @@ impl CachedObject {
             Err(err) => {
                 tracing::error!(
                     "Failed to read object '{}' from bucket '{}': {:#}",
-                    self.inner.object_key,
-                    self.inner.bucket,
+                    self.object_key,
+                    self.bucket,
                     err
                 );
 
