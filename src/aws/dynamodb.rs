@@ -58,13 +58,13 @@ impl DynamoClient {
         {
             Ok(_) => Ok(true),
             Err(err)
-                if err
-                    .as_service_error()
-                    .map(|e| e.is_resource_not_found_exception())
-                    .unwrap_or(false) =>
-            {
-                Ok(false)
-            }
+            if err
+                .as_service_error()
+                .map(|e| e.is_resource_not_found_exception())
+                .unwrap_or(false) =>
+                {
+                    Ok(false)
+                }
             Err(e) => Err(e).context(format!("Cannot access DynamoDB table '{}'", effective_name)),
         }
     }
@@ -170,124 +170,6 @@ impl DynamoClient {
             )
             .build()
     }
-    //
-    // table
-    //     .attribute_definitions(
-    //         AttributeDefinition::builder()
-    //             .attribute_name(FIELD_TENANT_ID)
-    //             .attribute_type(ScalarAttributeType::S)
-    //             .build()?,
-    //     )
-    //     .attribute_definitions(
-    //         AttributeDefinition::builder()
-    //             .attribute_name(FIELD_BLOCK_ID)
-    //             .attribute_type(ScalarAttributeType::S)
-    //             .build()?,
-    //     )
-    //     .attribute_definitions(
-    //         AttributeDefinition::builder()
-    //             .attribute_name(FIELD_VALID_FROM)
-    //             .attribute_type(ScalarAttributeType::S)
-    //             .build()?,
-    //     )
-    //     .attribute_definitions(
-    //         AttributeDefinition::builder()
-    //             .attribute_name(FIELD_VALID_FROM_AND_LAST_CONFIRMED)
-    //             .attribute_type(ScalarAttributeType::S)
-    //             .build()?,
-    //     )
-    //     .attribute_definitions(
-    //         AttributeDefinition::builder()
-    //             .attribute_name(FIELD_CORE_COORDINATES)
-    //             .attribute_type(ScalarAttributeType::S)
-    //             .build()?,
-    //     )
-    //     .attribute_definitions(
-    //         AttributeDefinition::builder()
-    //             .attribute_name(FIELD_TYPED_CORE_COORDINATES)
-    //             .attribute_type(ScalarAttributeType::S)
-    //             .build()?,
-    //     )
-    //     .key_schema(
-    //         KeySchemaElement::builder()
-    //             .attribute_name(FIELD_TENANT_ID)
-    //             .key_type(KeyType::Hash)
-    //             .build()?,
-    //     )
-    //     .key_schema(
-    //         KeySchemaElement::builder()
-    //             .attribute_name(FIELD_BLOCK_ID)
-    //             .key_type(KeyType::Range)
-    //             .build()?,
-    //     )
-    //     .global_secondary_indexes(
-    //         GlobalSecondaryIndex::builder()
-    //             .index_name(INDEX_CORE_COORDINATES)
-    //             .key_schema(
-    //                 KeySchemaElement::builder()
-    //                     .attribute_name(FIELD_CORE_COORDINATES)
-    //                     .key_type(KeyType::Hash)
-    //                     .build()?,
-    //             )
-    //             .key_schema(
-    //                 KeySchemaElement::builder()
-    //                     .attribute_name(FIELD_VALID_FROM_AND_LAST_CONFIRMED)
-    //                     .key_type(KeyType::Range)
-    //                     .build()?,
-    //             )
-    //             .projection(
-    //                 Projection::builder()
-    //                     .projection_type(ProjectionType::All)
-    //                     .build(),
-    //             )
-    //             .build()?,
-    //     )
-    //     .global_secondary_indexes(
-    //         GlobalSecondaryIndex::builder()
-    //             .index_name(INDEX_TYPED_CORE_COORDINATES)
-    //             .key_schema(
-    //                 KeySchemaElement::builder()
-    //                     .attribute_name(FIELD_TYPED_CORE_COORDINATES)
-    //                     .key_type(KeyType::Hash)
-    //                     .build()?,
-    //             )
-    //             .key_schema(
-    //                 KeySchemaElement::builder()
-    //                     .attribute_name(FIELD_VALID_FROM)
-    //                     .key_type(KeyType::Range)
-    //                     .build()?,
-    //             )
-    //             .projection(
-    //                 Projection::builder()
-    //                     .projection_type(ProjectionType::All)
-    //                     .build(),
-    //             )
-    //             .build()?,
-    //     )
-    // .global_secondary_indexes(
-    //     GlobalSecondaryIndex::builder()
-    //         .index_name("TenantAssetLastConfirmedIndex")
-    //         .key_schema(
-    //             KeySchemaElement::builder()
-    //                 .attribute_name("computedTenantIdAndAssetName")
-    //                 .key_type(KeyType::Hash)
-    //                 .build()?,
-    //         )
-    //         .key_schema(
-    //             KeySchemaElement::builder()
-    //                 .attribute_name("lastConfirmed")
-    //                 .key_type(KeyType::Range)
-    //                 .build()?,
-    //         )
-    //         .projection(
-    //             Projection::builder()
-    //                 .projection_type(ProjectionType::All)
-    //                 .build(),
-    //         )
-    //         .build()?,
-    // )
-    // .billing_mode(BillingMode::PayPerRequest)
-    // }
 
     async fn wait_until_table_becomes_active(&self, table_name: &str) -> anyhow::Result<()> {
         let effective_name = self.effective_name(table_name);
@@ -388,7 +270,7 @@ impl DynamoClient {
 
     pub fn stream_all<E>(
         query_fluent_builder: QueryFluentBuilder,
-    ) -> anyhow::Result<Pin<Box<dyn Stream<Item = anyhow::Result<E>> + Send>>>
+    ) -> anyhow::Result<Pin<Box<dyn Stream<Item=anyhow::Result<E>> + Send>>>
     where
         E: Serialize + DeserializeOwned + Send + 'static,
     {
@@ -455,15 +337,6 @@ impl DynamoClient {
     {
         Self::stream_all(query_fluent_builder)?.try_collect().await
     }
-}
-
-const ID_ALPHABET: [char; 36] = [
-    '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I',
-    'J', 'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z',
-];
-
-pub fn generate_id() -> String {
-    nanoid::format(nanoid::rngs::default, &ID_ALPHABET, 32)
 }
 
 #[cfg(test)]
