@@ -36,8 +36,9 @@ hyper = "0.14"
 async-trait = { version = "0.1", optional = true }
 
 [features]
-default = []
+default = ["pretty_logs", "open_telemetry", "aws_s3", "aws_dynamodb", "config"]
 pretty_logs = ["nu-ansi-term"]
 open_telemetry = ["opentelemetry", "opentelemetry-otlp", "opentelemetry_sdk", "tracing-opentelemetry"]
 aws_s3 = ["aws-config", "aws-sdk-s3", "async-trait"]
 aws_dynamodb = ["aws-config", "aws-sdk-dynamodb", "serde_dynamo"]
+config = ["async-trait"]

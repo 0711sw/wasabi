@@ -1,5 +1,4 @@
 use crate::web::error::ResultExt;
-use crate::{KB, MB};
 use anyhow::Context;
 use async_trait::async_trait;
 use aws_sdk_s3::primitives::{AggregatedBytes, ByteStream};
@@ -20,6 +19,7 @@ use tokio::sync::Notify;
 use tokio::sync::RwLock;
 use tokio::time::Duration;
 use tokio::time::Instant;
+use crate::tools::{KB, MB};
 
 const MULTIPART_UPLOAD_IDEAL_PART_SIZE: usize = 16 * MB;
 const MULTIPART_UPLOAD_BUFFER_SIZE: usize = MULTIPART_UPLOAD_IDEAL_PART_SIZE + (16 * KB);
