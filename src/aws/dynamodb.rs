@@ -111,6 +111,12 @@ impl DynamoClient {
             .attribute_type(ScalarAttributeType::S)
             .build()
     }
+    pub fn int_attribute(name: &str) -> Result<AttributeDefinition, BuildError> {
+        AttributeDefinition::builder()
+            .attribute_name(name)
+            .attribute_type(ScalarAttributeType::N)
+            .build()
+    }
 
     pub fn with_hash_index(
         builder: CreateTableFluentBuilder,
@@ -203,6 +209,17 @@ impl DynamoClient {
         self.client
             .put_item()
             .table_name(self.effective_name(table_name))
+    }
+
+    pub fn put_entity<T: Serialize>(
+        &self,
+        table_name: &str,
+        entity: &T,
+    ) -> anyhow::Result<PutItemFluentBuilder> {
+        let item = serde_dynamo::aws_sdk_dynamodb_1::to_item(entity)
+            .context("Error serializing entity into DynamoDB item")?;
+
+        Ok(self.put_item(table_name).set_item(Some(item)))
     }
 
     pub fn get_item(&self, table_name: &str) -> GetItemFluentBuilder {
@@ -336,6 +353,10 @@ impl DynamoClient {
         E: Serialize + DeserializeOwned + Send + 'static,
     {
         Self::stream_all(query_fluent_builder)?.try_collect().await
+    }
+
+    pub fn generate_id() -> String {
+        crate::tools::id_generator::generate_id(32)
     }
 }
 

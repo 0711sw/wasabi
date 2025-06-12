@@ -1,3 +1,4 @@
+use crate::client_bail;
 use crate::config::client::ConfigClient;
 use crate::config::descriptor::{ConfigDescriptor, Validator};
 use crate::tools::i18n_string::I18nString;
@@ -8,10 +9,12 @@ use warp::Filter;
 use warp::filters::BoxedFilter;
 
 #[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub(crate) struct FeatureElement {
     pub name: String,
     pub label: I18nString,
     pub description: I18nString,
+    pub auto_granted: bool,
 }
 
 pub(crate) struct FeatureDescriptor;
@@ -80,13 +83,15 @@ async fn handle_get_granted_features(
 ) -> anyhow::Result<Vec<FeatureInfo>> {
     let granted_features = config_client
         .repository
-        .fetch_granted_features(&user.tenant_id()?)
-        .await?;
+        .fetch_tenant_settings(&user.tenant_id()?)
+        .await?
+        .granted_features;
 
     Ok(config_client
         .find_all::<FeatureDescriptor>(&user.tenant_id()?)
         .await?
         .iter()
+        .filter(|feature| !feature.auto_granted)
         .map(|feature| from_config(&feature, "xx", granted_features.contains(&feature.name)))
         .collect())
 }
@@ -118,10 +123,19 @@ async fn handle_post_granted_features(
     user: User,
     feature_update: FeatureUpdate,
 ) -> anyhow::Result<FeatureUpdate> {
+    let tenant_id = user.tenant_id()?;
+    let mut settings = config_client
+        .repository
+        .fetch_tenant_settings(tenant_id)
+        .await?;
+
+    settings.granted_features = feature_update.features.clone();
+
     config_client
         .repository
-        .store_granted_features(&user.tenant_id()?, feature_update.features.clone())
+        .store_tenant_settings(settings)
         .await?;
+
     Ok(feature_update)
 }
 
@@ -149,21 +163,23 @@ async fn handle_get_enabled_features(
     config_client: ConfigClient,
     user: User,
 ) -> anyhow::Result<Vec<FeatureInfo>> {
-    let granted_features = config_client
+    let settings = config_client
         .repository
-        .fetch_granted_features(&user.tenant_id()?)
-        .await?;
-    let enabled_features = config_client
-        .repository
-        .fetch_enabled_features(&user.tenant_id()?)
+        .fetch_tenant_settings(&user.tenant_id()?)
         .await?;
 
     Ok(config_client
         .find_all::<FeatureDescriptor>(&user.tenant_id()?)
         .await?
         .iter()
-        .filter(|feature| granted_features.contains(&feature.name))
-        .map(|feature| from_config(&feature, "xx", enabled_features.contains(&feature.name)))
+        .filter(|feature| feature.auto_granted || settings.granted_features.contains(&feature.name))
+        .map(|feature| {
+            from_config(
+                &feature,
+                "xx",
+                settings.enabled_features.contains(&feature.name),
+            )
+        })
         .collect())
 }
 
@@ -194,22 +210,32 @@ async fn handle_post_enabled_features(
     user: User,
     feature_update: FeatureUpdate,
 ) -> anyhow::Result<FeatureUpdate> {
-    let granted_features = config_client
+    let tenant_id = user.tenant_id()?;
+    let mut settings = config_client
         .repository
-        .fetch_granted_features(&user.tenant_id()?)
+        .fetch_tenant_settings(tenant_id)
+        .await?;
+    let features = config_client
+        .find_all::<FeatureDescriptor>(tenant_id)
         .await?;
 
-    let effective_features: Vec<String> = feature_update
+    settings.enabled_features = feature_update
         .features
         .into_iter()
-        .filter(|feature| granted_features.contains(feature))
+        .filter(|feature| {
+            settings.granted_features.contains(feature)
+                || features
+                    .iter()
+                    .any(|f| f.name == *feature && f.auto_granted)
+        })
         .collect();
 
     config_client
         .repository
-        .store_enabled_features(&user.tenant_id()?, effective_features.clone())
+        .store_tenant_settings(settings.clone())
         .await?;
+
     Ok(FeatureUpdate {
-        features: effective_features,
+        features: settings.enabled_features,
     })
 }

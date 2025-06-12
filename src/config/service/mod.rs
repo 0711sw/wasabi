@@ -2,7 +2,6 @@ pub mod elements;
 pub mod features;
 pub mod system;
 
-use serde::Serialize;
 use serde_json::Value;
 
 pub struct ElementInfo {

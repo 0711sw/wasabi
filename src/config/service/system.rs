@@ -81,7 +81,7 @@ pub fn post_system_module_route(
         .and(with_cloneable(config_client))
         .and(with_user(authenticator))
         .and(warp::body::json::<SystemModuleBody>())
-        .and_then(handle_post_validate_system_module_route)
+        .and_then(handle_post_system_module_route)
         .boxed()
 }
 

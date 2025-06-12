@@ -15,14 +15,14 @@ use std::io::Error;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
+use bytesize::{KB, MB};
 use tokio::sync::Notify;
 use tokio::sync::RwLock;
 use tokio::time::Duration;
 use tokio::time::Instant;
-use crate::tools::{KB, MB};
 
-const MULTIPART_UPLOAD_IDEAL_PART_SIZE: usize = 16 * MB;
-const MULTIPART_UPLOAD_BUFFER_SIZE: usize = MULTIPART_UPLOAD_IDEAL_PART_SIZE + (16 * KB);
+const MULTIPART_UPLOAD_IDEAL_PART_SIZE: usize = 16 * MB as usize;
+const MULTIPART_UPLOAD_BUFFER_SIZE: usize = MULTIPART_UPLOAD_IDEAL_PART_SIZE + (16 * KB as usize);
 
 #[derive(Clone, Debug)]
 pub struct S3Client {

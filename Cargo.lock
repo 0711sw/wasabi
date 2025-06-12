@@ -649,6 +649,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "bytesize"
+version = "2.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a3c8f83209414aacf0eeae3cf730b18d6981697fba62f200fcfb92b9f082acba"
+
+[[package]]
 name = "cc"
 version = "1.2.26"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3175,6 +3181,7 @@ dependencies = [
  "aws-sdk-dynamodb",
  "aws-sdk-s3",
  "bytes",
+ "bytesize",
  "chrono",
  "futures-util",
  "hmac",

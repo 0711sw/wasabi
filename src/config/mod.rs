@@ -1,6 +1,5 @@
 pub mod client;
-mod manager;
 pub mod descriptor;
-mod repository;
-mod service;
+pub mod repository;
+pub mod service;
 
