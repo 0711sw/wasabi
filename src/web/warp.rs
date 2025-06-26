@@ -1,6 +1,7 @@
 use crate::client_bail;
 use crate::web::error::{ApiError, ResultExt};
 use anyhow::{Context, anyhow};
+use bytes::Bytes;
 use futures_util::{Stream, StreamExt, TryStreamExt};
 use http::Request;
 use hyper::{Body, Server};
@@ -21,10 +22,11 @@ use warp::http::{HeaderValue, StatusCode};
 use warp::reply::Response;
 use warp::{Filter, Rejection, Reply, http, reply};
 
+use crate::tools::PinnedBytesStream;
 use tower::{Service, ServiceBuilder};
 
-pub fn content_length_header() -> impl Filter<Extract = (i64,), Error = Rejection> + Clone {
-    warp::header::header::<i64>(http::header::CONTENT_LENGTH.as_str())
+pub fn content_length_header() -> impl Filter<Extract = (u64,), Error = Rejection> + Clone {
+    warp::header::header::<u64>(http::header::CONTENT_LENGTH.as_str())
 }
 
 pub fn with_cloneable<C: Clone + Send>(
@@ -33,10 +35,23 @@ pub fn with_cloneable<C: Clone + Send>(
     warp::any().map(move || value.clone())
 }
 
-pub async fn body_as_buffer(
-    stream: impl Stream<Item = Result<impl Buf, warp::Error>> + Unpin + Send,
-    content_length: i64,
-    max_body_size: i64,
+pub fn with_body_as_buffer(
+    max_body_size: u64,
+) -> impl Filter<Extract = (Vec<u8>,), Error = Rejection> + Clone {
+    warp::body::stream()
+        .and(content_length_header())
+        .and(with_cloneable(max_body_size))
+        .and_then(async move |stream, content_length, max_body_size| {
+            body_as_buffer(stream, content_length, max_body_size)
+                .await
+                .map_err(into_rejection)
+        })
+}
+
+async fn body_as_buffer(
+    stream: impl Stream<Item = Result<impl Buf + Send + 'static, warp::Error>> + Unpin + Send + 'static,
+    content_length: u64,
+    max_body_size: u64,
 ) -> anyhow::Result<Vec<u8>> {
     if content_length == 0 {
         client_bail!("Empty input data");
@@ -49,11 +64,11 @@ pub async fn body_as_buffer(
     read_into_buffer(stream, content_length).await
 }
 
-pub async fn as_size_limited_stream<E: Error + Send + Sync + 'static>(
+async fn as_size_limited_stream<E: Error + Send + Sync + 'static>(
     stream: impl Stream<Item = Result<impl Buf, E>> + Unpin + Send,
-    content_length: i64,
+    content_length: u64,
 ) -> impl Stream<Item = Result<impl Buf, std::io::Error>> {
-    let mut remaining_bytes = content_length;
+    let mut remaining_bytes = content_length as i64;
 
     stream.map(move |result| match result {
         Ok(bytes) => {
@@ -68,9 +83,48 @@ pub async fn as_size_limited_stream<E: Error + Send + Sync + 'static>(
     })
 }
 
+fn buf_to_bytes(mut buf: impl Buf) -> Bytes {
+    let len = buf.remaining();
+    let mut vec = vec![0u8; len];
+    buf.copy_to_slice(&mut vec);
+    Bytes::from(vec)
+}
+
+pub fn with_body_as_stream(
+    max_content_size: u64,
+) -> impl Filter<Extract = (PinnedBytesStream,), Error = Rejection> + Clone {
+    warp::body::stream()
+        .and(content_length_header())
+        .and(with_cloneable(max_content_size))
+        .and_then(async move |stream, content_length, max_content_size| {
+            as_stream(
+                as_size_limited_stream(stream, content_length).await,
+                content_length,
+                max_content_size,
+            )
+            .await
+            .map_err(into_rejection)
+        })
+}
+
+async fn as_stream(
+    stream: impl Stream<Item = Result<impl Buf + 'static, std::io::Error>> + Unpin + Send + 'static,
+    content_length: u64,
+    max_body_size: u64,
+) -> anyhow::Result<PinnedBytesStream> {
+    if content_length == 0 {
+        client_bail!("Empty input data");
+    }
+    if content_length > max_body_size {
+        client_bail!("The given request data is too large");
+    }
+
+    Ok(Box::pin(stream.map_ok(buf_to_bytes)) as PinnedBytesStream)
+}
+
 pub async fn read_into_buffer(
     mut stream: impl Stream<Item = Result<impl Buf, std::io::Error>> + Unpin,
-    content_length: i64,
+    content_length: u64,
 ) -> anyhow::Result<Vec<u8>> {
     let mut data = Vec::with_capacity(content_length as usize);
     while let Some(chunk) = stream
@@ -85,10 +139,23 @@ pub async fn read_into_buffer(
     Ok(data)
 }
 
-pub async fn decode_json<T: DeserializeOwned + Send>(
-    stream: impl Stream<Item = Result<impl Buf, warp::Error>> + Unpin + Send,
-    content_length: i64,
-    max_body_size: i64,
+pub fn with_body_as_json<T: DeserializeOwned + Send>(
+    max_body_size: u64,
+) -> impl Filter<Extract = (T,), Error = Rejection> + Clone {
+    warp::body::stream()
+        .and(content_length_header())
+        .and(with_cloneable(max_body_size))
+        .and_then(async |stream, content_length, max_body_size| {
+            decode_json(stream, content_length, max_body_size)
+                .await
+                .map_err(into_rejection)
+        })
+}
+
+async fn decode_json<T: DeserializeOwned + Send>(
+    stream: impl Stream<Item = Result<impl Buf + Send + 'static, warp::Error>> + Unpin + Send + 'static,
+    content_length: u64,
+    max_body_size: u64,
 ) -> anyhow::Result<T> {
     let data = body_as_buffer(stream, content_length, max_body_size).await?;
     let decoded = serde_json::from_slice(&data)
@@ -98,10 +165,23 @@ pub async fn decode_json<T: DeserializeOwned + Send>(
     Ok(decoded)
 }
 
-pub async fn body_as_string(
-    stream: impl Stream<Item = Result<impl Buf, warp::Error>> + Unpin + Send,
-    content_length: i64,
-    max_body_size: i64,
+pub fn with_body_as_string(
+    max_body_size: u64,
+) -> impl Filter<Extract = (String,), Error = Rejection> + Clone {
+    warp::body::stream()
+        .and(content_length_header())
+        .and(with_cloneable(max_body_size))
+        .and_then(async |stream, content_length, max_body_size| {
+            body_as_string(stream, content_length, max_body_size)
+                .await
+                .map_err(into_rejection)
+        })
+}
+
+async fn body_as_string(
+    stream: impl Stream<Item = Result<impl Buf + Send + 'static, warp::Error>> + Unpin + Send + 'static,
+    content_length: u64,
+    max_body_size: u64,
 ) -> anyhow::Result<String> {
     let data = body_as_buffer(stream, content_length, max_body_size).await?;
     let data_as_string = String::from_utf8(data)

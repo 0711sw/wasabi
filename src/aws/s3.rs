@@ -1,5 +1,4 @@
 use crate::web::error::ResultExt;
-use crate::{KB, MB};
 use anyhow::Context;
 use async_trait::async_trait;
 use aws_sdk_s3::primitives::{AggregatedBytes, ByteStream};
@@ -8,11 +7,10 @@ use aws_sdk_s3::types::CompletedPart;
 use aws_sdk_s3::types::{BucketLocationConstraint, CreateBucketConfiguration};
 use aws_sdk_s3::{Client, config};
 use bytes::{Buf, Bytes};
-use futures_util::Stream;
+use bytesize::{KB, MB};
 use futures_util::TryStreamExt;
 use std::env;
 use std::fmt::{Debug, Display};
-use std::io::Error;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
@@ -21,8 +19,8 @@ use tokio::sync::RwLock;
 use tokio::time::Duration;
 use tokio::time::Instant;
 
-const MULTIPART_UPLOAD_IDEAL_PART_SIZE: usize = 16 * MB;
-const MULTIPART_UPLOAD_BUFFER_SIZE: usize = MULTIPART_UPLOAD_IDEAL_PART_SIZE + (16 * KB);
+const MULTIPART_UPLOAD_IDEAL_PART_SIZE: usize = 16 * MB as usize;
+const MULTIPART_UPLOAD_BUFFER_SIZE: usize = MULTIPART_UPLOAD_IDEAL_PART_SIZE + (16 * KB as usize);
 
 #[derive(Clone, Debug)]
 pub struct S3Client {
@@ -276,7 +274,7 @@ impl S3Client {
         &self,
         bucket: &BucketName,
         object_key: &str,
-        stream: impl Stream<Item = Result<impl Buf, Error>> + Unpin + Send,
+        stream: crate::tools::PinnedBytesStream,
     ) -> anyhow::Result<()> {
         let effective_bucket = self.effective_name(bucket);
 
@@ -334,7 +332,7 @@ impl S3Client {
         effective_bucket: &str,
         key: &str,
         upload_id: &str,
-        mut stream: impl Stream<Item = Result<impl Buf, Error>> + Unpin + Send,
+        mut stream: crate::tools::PinnedBytesStream,
     ) -> anyhow::Result<()> {
         let mut buffer = Vec::with_capacity(MULTIPART_UPLOAD_BUFFER_SIZE);
         let mut part_number = 1;

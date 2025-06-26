@@ -58,13 +58,13 @@ impl DynamoClient {
         {
             Ok(_) => Ok(true),
             Err(err)
-            if err
-                .as_service_error()
-                .map(|e| e.is_resource_not_found_exception())
-                .unwrap_or(false) =>
-                {
-                    Ok(false)
-                }
+                if err
+                    .as_service_error()
+                    .map(|e| e.is_resource_not_found_exception())
+                    .unwrap_or(false) =>
+            {
+                Ok(false)
+            }
             Err(e) => Err(e).context(format!("Cannot access DynamoDB table '{}'", effective_name)),
         }
     }
@@ -109,6 +109,12 @@ impl DynamoClient {
         AttributeDefinition::builder()
             .attribute_name(name)
             .attribute_type(ScalarAttributeType::S)
+            .build()
+    }
+    pub fn int_attribute(name: &str) -> Result<AttributeDefinition, BuildError> {
+        AttributeDefinition::builder()
+            .attribute_name(name)
+            .attribute_type(ScalarAttributeType::N)
             .build()
     }
 
@@ -205,6 +211,17 @@ impl DynamoClient {
             .table_name(self.effective_name(table_name))
     }
 
+    pub fn put_entity<T: Serialize>(
+        &self,
+        table_name: &str,
+        entity: &T,
+    ) -> anyhow::Result<PutItemFluentBuilder> {
+        let item = serde_dynamo::aws_sdk_dynamodb_1::to_item(entity)
+            .context("Error serializing entity into DynamoDB item")?;
+
+        Ok(self.put_item(table_name).set_item(Some(item)))
+    }
+
     pub fn get_item(&self, table_name: &str) -> GetItemFluentBuilder {
         self.client
             .get_item()
@@ -270,7 +287,7 @@ impl DynamoClient {
 
     pub fn stream_all<E>(
         query_fluent_builder: QueryFluentBuilder,
-    ) -> anyhow::Result<Pin<Box<dyn Stream<Item=anyhow::Result<E>> + Send>>>
+    ) -> anyhow::Result<Pin<Box<dyn Stream<Item = anyhow::Result<E>> + Send>>>
     where
         E: Serialize + DeserializeOwned + Send + 'static,
     {
@@ -305,7 +322,7 @@ impl DynamoClient {
                     .items
                     .unwrap_or_default()
                     .into_iter()
-                    .map(serde_dynamo::from_item)
+                    .map(serde_dynamo::aws_sdk_dynamodb_1::from_item)
                     .collect::<Result<Vec<E>, _>>()
                     .context("Failed to deserialize items")?;
 
@@ -336,6 +353,35 @@ impl DynamoClient {
         E: Serialize + DeserializeOwned + Send + 'static,
     {
         Self::stream_all(query_fluent_builder)?.try_collect().await
+    }
+
+    pub fn generate_id() -> String {
+        crate::tools::id_generator::generate_id(32)
+    }
+
+}
+
+pub struct ItemBuilder {
+    item: HashMap<String, AttributeValue>,
+}
+
+impl ItemBuilder {
+    pub fn from_entity<T: Serialize>(entity: &T) -> anyhow::Result<ItemBuilder> {
+        let item = serde_dynamo::aws_sdk_dynamodb_1::to_item(entity)
+            .context("Error serializing entity into DynamoDB item")?;
+
+        Ok(ItemBuilder { item })
+    }
+
+    pub fn add_str(&mut self, key: impl Into<String>, value: impl Into<String>) {
+        self.item.insert(
+            key.into(),
+            AttributeValue::S(value.into()),
+        );
+    }
+
+    pub fn build(self) -> HashMap<String, AttributeValue> {
+        self.item
     }
 }
 
