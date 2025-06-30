@@ -1,5 +1,7 @@
 use crate::status_bail;
-use crate::web::auth::{CLAIM_ACT, CLAIM_EMAIL, CLAIM_LOCALE, CLAIM_NAME, CLAIM_PERMISSIONS, CLAIM_SUB, CLAIM_TENANT};
+use crate::web::auth::{
+    CLAIM_ACT, CLAIM_EMAIL, CLAIM_LOCALE, CLAIM_NAME, CLAIM_PERMISSIONS, CLAIM_SUB, CLAIM_TENANT,
+};
 use crate::web::error::ResultExt;
 use crate::web::validation::{is_valid_id, is_valid_str};
 use anyhow::Context;

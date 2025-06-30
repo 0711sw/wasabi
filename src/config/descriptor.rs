@@ -1,8 +1,8 @@
 use crate::config::service::features::FeatureDescriptor;
 use crate::config::service::system::ModuleDescriptor;
 use anyhow::Context;
-use serde::de::DeserializeOwned;
 use serde::Serialize;
+use serde::de::DeserializeOwned;
 use serde_json::Value;
 use std::any::Any;
 use std::collections::HashMap;
@@ -21,11 +21,13 @@ where
 }
 
 pub struct ConfigHandler {
-    pub(crate) parse: Box<dyn Fn(Value) -> anyhow::Result<Box<dyn Any + Send + Sync>> + Send + Sync>,
+    pub(crate) parse:
+        Box<dyn Fn(Value) -> anyhow::Result<Box<dyn Any + Send + Sync>> + Send + Sync>,
     pub(crate) validate: Box<
         dyn Fn(&Box<dyn Any + Send + Sync>, &mut Validator) -> anyhow::Result<()> + Send + Sync,
     >,
-    pub(crate) derive_id: Box<dyn Fn(&Box<dyn Any + Send + Sync>) -> anyhow::Result<String> + Send + Sync>,
+    pub(crate) derive_id:
+        Box<dyn Fn(&Box<dyn Any + Send + Sync>) -> anyhow::Result<String> + Send + Sync>,
 }
 
 pub struct Validator {

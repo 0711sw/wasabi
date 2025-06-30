@@ -1,4 +1,8 @@
-use crate::aws::dynamodb::DynamoClient;
+use crate::aws::dynamodb::client::DynamoClient;
+use crate::aws::dynamodb::schema::{
+    numeric_attribute, replicated_range_index, str_attribute, with_hash_index,
+};
+use crate::aws::dynamodb::{extract_entity, find_all};
 use crate::config::repository::{
     ConfigEntity, ConfigRepository, SystemConfigEntity, TenantSettingsEntity,
 };
@@ -33,21 +37,21 @@ impl DynamoConfigRepository {
         client
             .create_table(TABLE_CONFIG_SYSTEM_ELEMENTS, |table| {
                 let table = table
-                    .attribute_definitions(DynamoClient::str_attribute(FIELD_TYPE)?)
-                    .attribute_definitions(DynamoClient::str_attribute(FIELD_TYPE_AND_ID)?)
-                    .attribute_definitions(DynamoClient::int_attribute(FIELD_PRIORITY)?)
-                    .attribute_definitions(DynamoClient::str_attribute(FIELD_MODULE)?)
-                    .attribute_definitions(DynamoClient::str_attribute(FIELD_TXN)?);
+                    .attribute_definitions(str_attribute(FIELD_TYPE)?)
+                    .attribute_definitions(str_attribute(FIELD_TYPE_AND_ID)?)
+                    .attribute_definitions(numeric_attribute(FIELD_PRIORITY)?)
+                    .attribute_definitions(str_attribute(FIELD_MODULE)?)
+                    .attribute_definitions(str_attribute(FIELD_TXN)?);
 
-                let table = DynamoClient::with_hash_index(table, FIELD_TYPE_AND_ID)?;
+                let table = with_hash_index(table, FIELD_TYPE_AND_ID)?;
 
                 let table = table
-                    .global_secondary_indexes(DynamoClient::replicated_range_index(
+                    .global_secondary_indexes(replicated_range_index(
                         INDEX_TYPE_BY_PRIORITY,
                         FIELD_TYPE,
                         FIELD_PRIORITY,
                     )?)
-                    .global_secondary_indexes(DynamoClient::replicated_range_index(
+                    .global_secondary_indexes(replicated_range_index(
                         INDEX_MODULE_BY_TXN,
                         FIELD_MODULE,
                         FIELD_TXN,
@@ -60,15 +64,13 @@ impl DynamoConfigRepository {
         client
             .create_table(TABLE_CONFIG_TENANT_ELEMENTS, |table| {
                 let table = table
-                    .attribute_definitions(DynamoClient::str_attribute(
-                        FIELD_TENANT_AND_TYPE_AND_ID,
-                    )?)
-                    .attribute_definitions(DynamoClient::str_attribute(FIELD_TENANT_AND_TYPE)?)
-                    .attribute_definitions(DynamoClient::int_attribute(FIELD_PRIORITY)?);
+                    .attribute_definitions(str_attribute(FIELD_TENANT_AND_TYPE_AND_ID)?)
+                    .attribute_definitions(str_attribute(FIELD_TENANT_AND_TYPE)?)
+                    .attribute_definitions(numeric_attribute(FIELD_PRIORITY)?);
 
-                let table = DynamoClient::with_hash_index(table, FIELD_TENANT_AND_TYPE_AND_ID)?;
+                let table = with_hash_index(table, FIELD_TENANT_AND_TYPE_AND_ID)?;
 
-                let table = table.global_secondary_indexes(DynamoClient::replicated_range_index(
+                let table = table.global_secondary_indexes(replicated_range_index(
                     INDEX_TENANT_AND_TYPE_BY_PRIORITY,
                     FIELD_TENANT_AND_TYPE,
                     FIELD_PRIORITY,
@@ -80,9 +82,8 @@ impl DynamoConfigRepository {
 
         client
             .create_table(TABLE_CONFIG_TENANT_SETTINGS, |table| {
-                let table =
-                    table.attribute_definitions(DynamoClient::str_attribute(FIELD_TENANT_ID)?);
-                let table = DynamoClient::with_hash_index(table, FIELD_TENANT_ID)?;
+                let table = table.attribute_definitions(str_attribute(FIELD_TENANT_ID)?);
+                let table = with_hash_index(table, FIELD_TENANT_ID)?;
 
                 Ok(table.billing_mode(BillingMode::PayPerRequest))
             })
@@ -98,7 +99,7 @@ impl DynamoConfigRepository {
 impl ConfigRepository for DynamoConfigRepository {
     #[tracing::instrument(level = "debug", skip(self), ret)]
     async fn fetch_tenant_settings(&self, tenant_id: &str) -> anyhow::Result<TenantSettingsEntity> {
-        Ok(DynamoClient::extract_entity::<TenantSettingsEntity>(
+        Ok(extract_entity::<TenantSettingsEntity>(
             self.client
                 .query(TABLE_CONFIG_TENANT_SETTINGS)
                 .key_condition_expression("#tenantId = :tenant_id")
@@ -133,7 +134,7 @@ impl ConfigRepository for DynamoConfigRepository {
         type_name: &str,
         tenant_id: &str,
     ) -> anyhow::Result<Vec<ConfigEntity>> {
-        DynamoClient::find_all::<ConfigEntity>(
+        find_all::<ConfigEntity>(
             self.client
                 .query("config-tenant-elements")
                 .index_name("TenantAndTypePriorityIndex")
@@ -155,7 +156,7 @@ impl ConfigRepository for DynamoConfigRepository {
         tenant_id: &str,
         id: &str,
     ) -> anyhow::Result<Option<ConfigEntity>> {
-        let entity = DynamoClient::extract_entity::<ConfigEntity>(
+        let entity = extract_entity::<ConfigEntity>(
             self.client
                 .query("config-tenant-elements")
                 .key_condition_expression("#tenantAndTypeAndId = :tenantAndTypeAndId")
@@ -176,7 +177,7 @@ impl ConfigRepository for DynamoConfigRepository {
 
     #[tracing::instrument(level = "debug", skip(self), ret)]
     async fn find_all_for_system(&self, type_name: &str) -> anyhow::Result<Vec<ConfigEntity>> {
-        DynamoClient::find_all::<ConfigEntity>(
+        find_all::<ConfigEntity>(
             self.client
                 .query("config-system-elements")
                 .index_name("TypePriorityIndex")
@@ -194,7 +195,7 @@ impl ConfigRepository for DynamoConfigRepository {
         type_name: &str,
         id: &str,
     ) -> anyhow::Result<Option<ConfigEntity>> {
-        let entity = DynamoClient::extract_entity::<ConfigEntity>(
+        let entity = extract_entity::<ConfigEntity>(
             self.client
                 .query("config-system-elements")
                 .key_condition_expression("#typeAndId = :typeAndId")
@@ -259,7 +260,7 @@ impl ConfigRepository for DynamoConfigRepository {
     async fn remove_outdated_system_elements(&self, module: &str, txn: &str) -> anyhow::Result<()> {
         // DynamoDB does not support txn <> txn - therefore, we need to first delete everything that
         // is less than our txn to retain...
-        let items = DynamoClient::find_all::<ConfigEntity>(
+        let items = find_all::<ConfigEntity>(
             self.client
                 .query("config-system-elements")
                 .index_name("ModuleTxnIndex")
@@ -278,7 +279,7 @@ impl ConfigRepository for DynamoConfigRepository {
         }
 
         // ...and then delete everything that is greater than our txn to retain.
-        let items = DynamoClient::find_all::<ConfigEntity>(
+        let items = find_all::<ConfigEntity>(
             self.client
                 .query("config-system-elements")
                 .index_name("ModuleTxnIndex")

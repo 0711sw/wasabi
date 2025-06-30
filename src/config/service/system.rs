@@ -1,16 +1,16 @@
-use std::sync::Arc;
 use crate::config::client::ConfigClient;
 use crate::config::descriptor::{ConfigDescriptor, ValidationMessage, Validator};
 use crate::tools::i18n_string::I18nString;
 use crate::tools::id_generator::generate_id;
 use crate::web::DEFAULT_MAX_JSON_BODY_SIZE;
+use crate::web::auth::authenticator::Authenticator;
 use crate::web::auth::enforce_user_with_any_permission;
 use crate::web::warp::{into_response, with_body_as_json, with_cloneable};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use std::sync::Arc;
 use warp::Filter;
 use warp::filters::BoxedFilter;
-use crate::web::auth::authenticator::Authenticator;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub(crate) struct ModuleElement {
@@ -54,7 +54,10 @@ pub fn post_validate_system_module_route(
 ) -> BoxedFilter<(impl warp::Reply,)> {
     warp::path!("config" / "module" / "validate" / "v1")
         .and(warp::post())
-        .and(enforce_user_with_any_permission(authenticator, required_permissions))
+        .and(enforce_user_with_any_permission(
+            authenticator,
+            required_permissions,
+        ))
         .and(with_cloneable(config_client))
         .and(with_body_as_json::<SystemModuleBody>(
             DEFAULT_MAX_JSON_BODY_SIZE,
@@ -78,7 +81,10 @@ pub fn post_system_module_route(
 ) -> BoxedFilter<(impl warp::Reply,)> {
     warp::path!("config" / "module" / "v1")
         .and(warp::post())
-        .and(enforce_user_with_any_permission(authenticator, required_permissions))
+        .and(enforce_user_with_any_permission(
+            authenticator,
+            required_permissions,
+        ))
         .and(with_cloneable(config_client))
         .and(with_body_as_json::<SystemModuleBody>(
             DEFAULT_MAX_JSON_BODY_SIZE,

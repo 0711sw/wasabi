@@ -1,5 +1,5 @@
 use tokio::signal::ctrl_c;
-use tokio::signal::unix::{signal, SignalKind};
+use tokio::signal::unix::{SignalKind, signal};
 
 pub async fn await_termination(purpose: &str) {
     let ctrl_c = ctrl_c();

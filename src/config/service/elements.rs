@@ -1,18 +1,18 @@
-use std::sync::Arc;
 use crate::config::client::ConfigClient;
 use crate::config::descriptor::{ValidationMessage, Validator};
 use crate::config::repository::{ConfigEntity, TenantSettingsEntity};
 use crate::config::service::features::{FeatureDescriptor, FeatureInfo, from_config};
 use crate::config::service::system::ModuleDescriptor;
 use crate::web::DEFAULT_MAX_JSON_BODY_SIZE;
-use crate::web::auth::{with_user_with_any_permission};
+use crate::web::auth::authenticator::Authenticator;
+use crate::web::auth::user::User;
+use crate::web::auth::with_user_with_any_permission;
 use crate::web::warp::{into_response, with_body_as_json, with_cloneable};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::sync::Arc;
 use warp::Filter;
 use warp::filters::BoxedFilter;
-use crate::web::auth::authenticator::Authenticator;
-use crate::web::auth::user::User;
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -48,7 +48,10 @@ pub fn get_elements_route(
     warp::path!("config" / "elements" / "v1" / String)
         .and(warp::get())
         .and(with_cloneable(config_client))
-        .and(with_user_with_any_permission(authenticator, required_permissions))
+        .and(with_user_with_any_permission(
+            authenticator,
+            required_permissions,
+        ))
         .and_then(handle_get_elements_route)
         .boxed()
 }
@@ -204,7 +207,10 @@ pub fn put_element_route(
     warp::path!("config" / "element" / "v1")
         .and(warp::put())
         .and(with_cloneable(config_client))
-        .and(with_user_with_any_permission(authenticator, required_permissions))
+        .and(with_user_with_any_permission(
+            authenticator,
+            required_permissions,
+        ))
         .and(with_body_as_json::<Value>(DEFAULT_MAX_JSON_BODY_SIZE))
         .and_then(handle_put_element_route)
         .boxed()
@@ -268,7 +274,10 @@ pub fn delete_element_route(
     warp::path!("config" / "element" / "v1" / String / String)
         .and(warp::delete())
         .and(with_cloneable(config_client))
-        .and(with_user_with_any_permission(authenticator, required_permissions))
+        .and(with_user_with_any_permission(
+            authenticator,
+            required_permissions,
+        ))
         .and_then(handle_delete_element_route)
         .boxed()
 }

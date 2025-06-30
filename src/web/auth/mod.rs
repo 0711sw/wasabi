@@ -43,7 +43,8 @@ pub fn with_user_with_any_permission(
     permissions: &[&str],
 ) -> impl Filter<Extract = (User,), Error = Rejection> + Clone {
     with_user(authenticator).and_then(move |user: User| async move {
-        user.enforce_any_permission(permissions).map_err(into_rejection)
+        user.enforce_any_permission(permissions)
+            .map_err(into_rejection)
     })
 }
 
@@ -120,7 +121,7 @@ mod tests {
             self.claims.insert(key.to_owned(), value);
             self
         }
-        
+
         fn build_user(self) -> User {
             User {
                 claims: self.claims,
@@ -202,7 +203,7 @@ mod tests {
     #[test]
     fn user_tenant_id_fails_for_tenant_id_exceeding_max_length() {
         let user = Builder::new()
-            .with_string(CLAIM_TENANT, "a".repeat(33).as_str())
+            .with_string(CLAIM_TENANT, "a".repeat(65).as_str())
             .build_user();
         assert!(user.tenant_id().is_err());
     }
@@ -229,7 +230,7 @@ mod tests {
     #[test]
     fn user_user_id_fails_for_user_id_exceeding_max_length() {
         let user = Builder::new()
-            .with_string(CLAIM_SUB, "a".repeat(33).as_str())
+            .with_string(CLAIM_SUB, "a".repeat(65).as_str())
             .build_user();
         assert!(user.user_id().is_err());
     }
@@ -336,9 +337,20 @@ mod tests {
             .with_value(CLAIM_PERMISSIONS, json!(["permission1", "permission2"]))
             .build_user();
 
-        assert!(user.clone().enforce_any_permission(&[&"permission1"]).is_ok());
-        assert!(user.clone().enforce_any_permission(&[&"permission2"]).is_ok());
-        assert!(user.enforce_any_permission(&[&"permissionX", &"permission1"]).is_ok());
+        assert!(
+            user.clone()
+                .enforce_any_permission(&[&"permission1"])
+                .is_ok()
+        );
+        assert!(
+            user.clone()
+                .enforce_any_permission(&[&"permission2"])
+                .is_ok()
+        );
+        assert!(
+            user.enforce_any_permission(&[&"permissionX", &"permission1"])
+                .is_ok()
+        );
     }
 
     #[test]

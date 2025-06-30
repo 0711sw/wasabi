@@ -207,7 +207,7 @@ mod tests {
         let str: I18nString = serde_json::from_str("{\"de\": \"test_de\"}").unwrap();
         assert_eq!(str.standard(), None);
         assert_eq!(str.get("de").unwrap(), "test_de");
-        assert_eq!(str.get("de"), None);
+        assert_eq!(str.get("en"), None);
 
         let str: I18nString =
             serde_json::from_str("{\"de\": \"test_de\",\"xx\": \"test\"}").unwrap();

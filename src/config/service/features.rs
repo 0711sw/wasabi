@@ -1,15 +1,15 @@
-use std::sync::Arc;
 use crate::config::client::ConfigClient;
 use crate::config::descriptor::{ConfigDescriptor, Validator};
 use crate::tools::i18n_string::I18nString;
 use crate::web::DEFAULT_MAX_JSON_BODY_SIZE;
-use crate::web::auth::{with_user_with_any_permission};
-use crate::web::warp::{into_response, with_body_as_json, with_cloneable};
-use serde::{Deserialize, Serialize};
-use warp::Filter;
-use warp::filters::BoxedFilter;
 use crate::web::auth::authenticator::Authenticator;
 use crate::web::auth::user::User;
+use crate::web::auth::with_user_with_any_permission;
+use crate::web::warp::{into_response, with_body_as_json, with_cloneable};
+use serde::{Deserialize, Serialize};
+use std::sync::Arc;
+use warp::Filter;
+use warp::filters::BoxedFilter;
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -69,7 +69,10 @@ pub fn get_granted_features_route(
     warp::path!("config" / "granted-features" / "v1")
         .and(warp::get())
         .and(with_cloneable(config_client))
-        .and(with_user_with_any_permission(authenticator, required_permissions))
+        .and(with_user_with_any_permission(
+            authenticator,
+            required_permissions,
+        ))
         .and_then(handle_get_granted_features_route)
         .boxed()
 }
@@ -109,7 +112,10 @@ pub fn post_granted_features_route(
     warp::path!("config" / "granted-features" / "v1")
         .and(warp::post())
         .and(with_cloneable(config_client))
-        .and(with_user_with_any_permission(authenticator, required_permissions))
+        .and(with_user_with_any_permission(
+            authenticator,
+            required_permissions,
+        ))
         .and(with_body_as_json::<FeatureUpdate>(
             DEFAULT_MAX_JSON_BODY_SIZE,
         ))
@@ -155,7 +161,10 @@ pub fn get_enabled_features_route(
     warp::path!("config" / "features" / "v1")
         .and(warp::get())
         .and(with_cloneable(config_client))
-        .and(with_user_with_any_permission(authenticator, required_permissions))
+        .and(with_user_with_any_permission(
+            authenticator,
+            required_permissions,
+        ))
         .and_then(handle_get_enabled_features_route)
         .boxed()
 }
@@ -200,7 +209,10 @@ pub fn post_enabled_features_route(
     warp::path!("config" / "features" / "v1")
         .and(warp::post())
         .and(with_cloneable(config_client))
-        .and(with_user_with_any_permission(authenticator, required_permissions))
+        .and(with_user_with_any_permission(
+            authenticator,
+            required_permissions,
+        ))
         .and(with_body_as_json::<FeatureUpdate>(
             DEFAULT_MAX_JSON_BODY_SIZE,
         ))
