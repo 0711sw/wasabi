@@ -27,6 +27,7 @@ impl Authenticator for SimpleAuthenticator {
     async fn parse_jwt(&self, jwt_token: &str) -> anyhow::Result<BTreeMap<String, Value>> {
         let mut validation = Validation::new(Algorithm::HS256);
         validation.validate_exp = true;
+        validation.validate_aud = false;
         validation.required_spec_claims.clear();
 
         let claims: BTreeMap<String, Value> =
