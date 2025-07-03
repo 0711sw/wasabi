@@ -27,7 +27,7 @@ pub struct FirehoseEventRecorder {
 
 impl FirehoseEventRecorder {}
 
-const NON_CHARS: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"[^a-z]+").unwrap());
+const NON_CHARS: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"[^a-z0-9]+").unwrap());
 impl FirehoseEventRecorder {
     #[tracing::instrument(err(Display))]
     pub async fn from_env() -> anyhow::Result<Self> {
