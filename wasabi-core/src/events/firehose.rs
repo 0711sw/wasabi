@@ -25,12 +25,10 @@ pub struct FirehoseEventRecorder {
     system: String,
 }
 
-
 impl FirehoseEventRecorder {}
 
 const NON_CHARS: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"[^a-z]+").unwrap());
 impl FirehoseEventRecorder {
-
     #[tracing::instrument(err(Display))]
     pub async fn from_env() -> anyhow::Result<Self> {
         let config = aws_config::load_from_env().await;

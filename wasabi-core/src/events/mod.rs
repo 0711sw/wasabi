@@ -1,9 +1,9 @@
 #[cfg(feature = "aws_firehose")]
 pub mod firehose;
 
-use std::fmt::Debug;
 use async_trait::async_trait;
 use serde::Serialize;
+use std::fmt::Debug;
 
 pub trait Event: Serialize + Debug + Send + Sync {
     fn event_type(&self) -> &'static str;
