@@ -274,8 +274,14 @@ where
         .with_graceful_shutdown(system::await_shutdown())
         .await
         .with_context(|| format!("Failed to bind HTTP server to {}", bind_address))?;
-    tracing::info!("HTTP Server has terminated...");
-
+    
+    tracing::info!("HTTP Server has been stopped...");
+    // Wait a bit to ensure all requests are processed and also permit background tasks to finish
+    // (as most probably the web server will run in the main thread which will cause the process
+    // to terminate once it completes).
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    tracing::info!("HTTP Server has been terminated.");
+    
     Ok(())
 }
 
