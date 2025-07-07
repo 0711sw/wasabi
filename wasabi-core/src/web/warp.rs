@@ -22,7 +22,7 @@ use warp::http::{HeaderValue, StatusCode};
 use warp::reply::Response;
 use warp::{Filter, Rejection, Reply, http, reply};
 
-use crate::tools::PinnedBytesStream;
+use crate::tools::{PinnedBytesStream, system};
 use tower::{Service, ServiceBuilder};
 
 pub fn content_length_header() -> impl Filter<Extract = (u64,), Error = Rejection> + Clone {
@@ -271,6 +271,7 @@ where
         server.local_addr()
     );
     server
+        .with_graceful_shutdown(system::await_shutdown())
         .await
         .with_context(|| format!("Failed to bind HTTP server to {}", bind_address))?;
     tracing::info!("HTTP Server has terminated...");
