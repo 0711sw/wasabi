@@ -14,6 +14,7 @@ use std::net::SocketAddr;
 use std::pin::Pin;
 use std::str::FromStr;
 use std::task::Poll;
+use std::time::Duration;
 use tokio_util::bytes::Buf;
 use tokio_util::bytes::BufMut;
 use tracing::{Instrument, Span, debug_span};
