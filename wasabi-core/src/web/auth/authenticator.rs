@@ -80,7 +80,7 @@ impl Authenticator for JwtsAuthenticator {
             .context("Failed to validate JWT token with JWKS key")
             .with_status(StatusCode::UNAUTHORIZED)?
             .claims;
-        
+
         if let Some(custom_claim_prefix) = &self.data.custom_claim_prefix {
             claims = Self::translate_claims(claims, &custom_claim_prefix);
         }
