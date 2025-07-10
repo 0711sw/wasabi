@@ -42,7 +42,7 @@ regex = "1.11"
 mock_instant = "0.6"
 
 [features]
-default = ["pretty_logs", "open_telemetry", "aws_s3", "aws_dynamodb", "aws_firehose", "config", "open_search"]
+default = []
 pretty_logs = ["nu-ansi-term"]
 open_telemetry = ["opentelemetry", "opentelemetry-otlp", "opentelemetry_sdk", "tracing-opentelemetry"]
 aws_s3 = ["aws-config", "aws-sdk-s3", "async-trait"]
