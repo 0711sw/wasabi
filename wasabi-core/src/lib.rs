@@ -13,6 +13,8 @@ pub mod opensearch;
 #[cfg(feature = "config")]
 pub mod config;
 pub mod events;
+#[cfg(feature = "scripting")]
+pub mod scripts;
 
 pub static APP_NAME: LazyLock<String> =
     LazyLock::new(|| env::var("APP_NAME").unwrap_or("WASABI".to_string()));

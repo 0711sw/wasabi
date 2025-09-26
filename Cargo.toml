@@ -12,7 +12,7 @@ wasabi-core = { path = "wasabi-core", default-features = false  }
 wasabi-macro = { path = "wasabi-macro" }
 
 [features]
-default = ["pretty_logs", "open_telemetry", "aws_s3", "aws_dynamodb", "aws_firehose", "config", "open_search"]
+default = ["scripting"]
 pretty_logs = ["wasabi-core/pretty_logs"]
 open_telemetry = ["wasabi-core/open_telemetry"]
 aws_s3 = ["wasabi-core/aws_s3"]
@@ -20,3 +20,4 @@ aws_dynamodb = ["wasabi-core/aws_dynamodb"]
 aws_firehose = ["wasabi-core/aws_firehose"]
 config = ["wasabi-core/config"]
 open_search = ["wasabi-core/open_search"]
+scripting = ["wasabi-core/scripting"]
