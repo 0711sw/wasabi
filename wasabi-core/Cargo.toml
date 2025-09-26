@@ -11,6 +11,7 @@ warp = "0.3.7"
 bytes = "1.10"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0", features = ["arbitrary_precision"] }
+serde_urlencoded = "0.7.1"
 chrono = { version = "0.4", features = ["serde"] }
 aws-config = { version = "1.8", features = ["behavior-version-latest"], optional = true }
 aws-sdk-s3 = { version = "1.82", optional = true }
@@ -33,10 +34,14 @@ nu-ansi-term = { version = "0.50", optional = true }
 rand = "0.9.0"
 tower = "0.5.2"
 hyper = "0.14"
-async-trait = { version = "0.1", optional = true }
+async-trait = { version = "0.1" }
 bytesize = "2.0"
 opensearch = { version = "2.3", optional = true }
 regex = "1.11"
+logos = { version = "0.15", optional = true }
+rust_decimal = { version = "1.37", features = ["serde-with-str"], optional = true }
+unescape = { version = "0.1", optional = true }
+bitflags = { version = "2.9", optional = true }
 
 [dev-dependencies]
 mock_instant = "0.6"
@@ -45,8 +50,8 @@ mock_instant = "0.6"
 default = []
 pretty_logs = ["nu-ansi-term"]
 open_telemetry = ["opentelemetry", "opentelemetry-otlp", "opentelemetry_sdk", "tracing-opentelemetry"]
-aws_s3 = ["aws-config", "aws-sdk-s3", "async-trait"]
+aws_s3 = ["aws-config", "aws-sdk-s3"]
 aws_dynamodb = ["aws-config", "aws-sdk-dynamodb", "serde_dynamo"]
 aws_firehose = ["aws-config", "aws-sdk-firehose"]
-config = ["async-trait"]
+config = []
 open_search = ["opensearch"]

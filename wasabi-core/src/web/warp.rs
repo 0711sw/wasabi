@@ -1,12 +1,12 @@
 use crate::client_bail;
 use crate::web::error::{ApiError, ResultExt};
-use anyhow::{Context, anyhow};
+use anyhow::{anyhow, Context};
 use bytes::Bytes;
 use futures_util::{Stream, StreamExt, TryStreamExt};
 use http::Request;
 use hyper::{Body, Server};
-use serde::Serialize;
 use serde::de::DeserializeOwned;
+use serde::Serialize;
 use std::convert::Infallible;
 use std::env;
 use std::error::Error;
@@ -17,13 +17,13 @@ use std::task::Poll;
 use std::time::Duration;
 use tokio_util::bytes::Buf;
 use tokio_util::bytes::BufMut;
-use tracing::{Instrument, Span, debug_span};
+use tracing::{debug_span, Instrument, Span};
 use warp::http::header::CONTENT_TYPE;
 use warp::http::{HeaderValue, StatusCode};
 use warp::reply::Response;
-use warp::{Filter, Rejection, Reply, http, reply};
+use warp::{http, reply, Filter, Rejection, Reply};
 
-use crate::tools::{PinnedBytesStream, system};
+use crate::tools::{system, PinnedBytesStream};
 use tower::{Service, ServiceBuilder};
 
 pub fn content_length_header() -> impl Filter<Extract = (u64,), Error = Rejection> + Clone {
@@ -166,6 +166,33 @@ async fn decode_json<T: DeserializeOwned + Send>(
     Ok(decoded)
 }
 
+pub fn with_body_as_form<T: DeserializeOwned + Send>(
+    max_body_size: u64,
+) -> impl Filter<Extract = (T,), Error = Rejection> + Clone {
+    warp::header::exact_ignore_case("content-type", "application/x-www-form-urlencoded")
+        .and(warp::body::stream())
+        .and(content_length_header())
+        .and(with_cloneable(max_body_size))
+        .and_then(async |stream, content_length, max_body_size| {
+            decode_form(stream, content_length, max_body_size)
+                .await
+                .map_err(into_rejection)
+        })
+}
+
+async fn decode_form<T: DeserializeOwned + Send>(
+    stream: impl Stream<Item = Result<impl Buf + Send + 'static, warp::Error>> + Unpin + Send + 'static,
+    content_length: u64,
+    max_body_size: u64,
+) -> anyhow::Result<T> {
+    let data = body_as_string(stream, content_length, max_body_size).await?;
+    let decoded = serde_urlencoded::from_str(&data)
+        .context("Invalid url-encoded data input")
+        .mark_client_error()?;
+
+    Ok(decoded)
+}
+
 pub fn with_body_as_string(
     max_body_size: u64,
 ) -> impl Filter<Extract = (String,), Error = Rejection> + Clone {
@@ -275,14 +302,14 @@ where
         .with_graceful_shutdown(system::await_shutdown())
         .await
         .with_context(|| format!("Failed to bind HTTP server to {}", bind_address))?;
-    
+
     tracing::info!("HTTP Server has been stopped...");
     // Wait a bit to ensure all requests are processed and also permit background tasks to finish
     // (as most probably the web server will run in the main thread which will cause the process
     // to terminate once it completes).
     tokio::time::sleep(Duration::from_secs(3)).await;
     tracing::info!("HTTP Server has been terminated.");
-    
+
     Ok(())
 }
 
@@ -368,8 +395,8 @@ mod open_telemetry {
 mod tests {
     use crate::web::warp::as_size_limited_stream;
     use bytes::Bytes;
-    use futures_util::StreamExt;
     use futures_util::stream;
+    use futures_util::StreamExt;
 
     #[tokio::test]
     async fn as_size_limited_stream_allows_valid_size() {
