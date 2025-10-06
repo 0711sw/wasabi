@@ -2,6 +2,8 @@
 pub mod dynamodb;
 #[cfg(feature = "aws_s3")]
 pub mod s3;
+#[cfg(feature = "aws_bedrock")]
+pub mod bedrock;
 
 #[cfg(test)]
 pub mod test {

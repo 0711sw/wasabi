@@ -5,15 +5,15 @@ use aws_sdk_s3::primitives::{AggregatedBytes, ByteStream};
 use aws_sdk_s3::types::CompletedMultipartUpload;
 use aws_sdk_s3::types::CompletedPart;
 use aws_sdk_s3::types::{BucketLocationConstraint, CreateBucketConfiguration};
-use aws_sdk_s3::{Client, config};
+use aws_sdk_s3::{config, Client};
 use bytes::{Buf, Bytes};
 use bytesize::{KB, MB};
 use futures_util::TryStreamExt;
 use std::env;
 use std::fmt::{Debug, Display};
-use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
+use std::sync::Arc;
 use tokio::sync::Notify;
 use tokio::sync::RwLock;
 use tokio::time::Duration;
@@ -50,6 +50,8 @@ pub trait CachedObject: Send + Sync {
     async fn fetch_cached(&self) -> anyhow::Result<Arc<Vec<u8>>>;
 
     async fn fetch(&self) -> anyhow::Result<Arc<Vec<u8>>>;
+
+    async fn fetch_with_flush(&self, flush: bool) -> anyhow::Result<Arc<Vec<u8>>>;
 }
 
 pub struct StaticCachedObject {
@@ -76,6 +78,10 @@ impl CachedObject for StaticCachedObject {
 
     async fn fetch(&self) -> anyhow::Result<Arc<Vec<u8>>> {
         Ok(Arc::new(self.content.clone()))
+    }
+
+    async fn fetch_with_flush(&self, flush: bool) -> anyhow::Result<Arc<Vec<u8>>> {
+        self.fetch().await
     }
 }
 
@@ -475,6 +481,14 @@ impl CachedObject for S3CachedObject {
         }
 
         self.fetch_and_cache().await
+    }
+
+    async fn fetch_with_flush(&self, flush: bool) -> anyhow::Result<Arc<Vec<u8>>> {
+        if flush {
+            self.fetch().await
+        } else {
+            self.fetch_cached().await
+        }
     }
 }
 

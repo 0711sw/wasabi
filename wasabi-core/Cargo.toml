@@ -6,6 +6,7 @@ edition = "2024"
 [dependencies]
 tokio = { version = "1.44", features = ["full"] }
 futures-util = "0.3"
+futures = "0.3"
 tokio-util = "0.7"
 warp = "0.3.7"
 bytes = "1.10"
@@ -16,8 +17,9 @@ chrono = { version = "0.4", features = ["serde"] }
 aws-config = { version = "1.8", features = ["behavior-version-latest"], optional = true }
 aws-sdk-s3 = { version = "1.82", optional = true }
 aws-sdk-dynamodb = { version = "1.71", optional = true }
-aws-sdk-firehose = {version = "1.82",optional = true }
 serde_dynamo = { version = "4.2", optional = true, features = ["aws-sdk-dynamodb+1"] }
+aws-sdk-firehose = { version = "1.82", optional = true }
+aws-sdk-bedrockruntime = { version = "1.82", optional = true }
 nanoid = { version = "0.4" }
 anyhow = "1.0"
 tracing = "0.1"
@@ -47,12 +49,13 @@ bitflags = { version = "2.9", optional = true }
 mock_instant = "0.6"
 
 [features]
-default = []
+default = ["aws_bedrock"]
 pretty_logs = ["nu-ansi-term"]
 open_telemetry = ["opentelemetry", "opentelemetry-otlp", "opentelemetry_sdk", "tracing-opentelemetry"]
 aws_s3 = ["aws-config", "aws-sdk-s3"]
 aws_dynamodb = ["aws-config", "aws-sdk-dynamodb", "serde_dynamo"]
 aws_firehose = ["aws-config", "aws-sdk-firehose"]
+aws_bedrock = ["aws-config", "aws-sdk-bedrockruntime"]
 config = []
 open_search = ["opensearch"]
 scripting = ["logos", "rust_decimal", "unescape", "bitflags"]

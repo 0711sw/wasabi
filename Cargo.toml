@@ -8,7 +8,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-wasabi-core = { path = "wasabi-core", default-features = false  }
+wasabi-core = { path = "wasabi-core", default-features = false }
 wasabi-macro = { path = "wasabi-macro" }
 
 [features]
@@ -18,6 +18,7 @@ open_telemetry = ["wasabi-core/open_telemetry"]
 aws_s3 = ["wasabi-core/aws_s3"]
 aws_dynamodb = ["wasabi-core/aws_dynamodb"]
 aws_firehose = ["wasabi-core/aws_firehose"]
+aws_bedrock = ["wasabi-core/aws_bedrock"]
 config = ["wasabi-core/config"]
 open_search = ["wasabi-core/open_search"]
 scripting = ["wasabi-core/scripting"]
