@@ -15,6 +15,139 @@ use std::str::FromStr;
 use std::sync::Arc;
 use warp::http::StatusCode;
 
+#[async_trait]
+pub trait ConfigFetcher: Send + Sync {
+    async fn fetch(&self, claims: &ClaimsSet) -> Option<Arc<AuthenticatorConfig>>;
+}
+
+pub struct Authenticator {
+    config: AuthenticatorConfig,
+    fetchers: Vec<Box<dyn ConfigFetcher>>,
+}
+
+impl Authenticator {
+    pub fn new(config: AuthenticatorConfig) -> Self {
+        Authenticator {
+            config,
+            fetchers: Vec::new(),
+        }
+    }
+
+    #[cfg(test)]
+    pub fn with_simple_secret(secret: &str) -> Self {
+        Self::new(AuthenticatorConfig::new(
+            None::<&str>,
+            Some(secret),
+            "",
+            "",
+            "",
+            DEFAULT_LOCALE.to_string(),
+            None,
+        ))
+    }
+
+    pub fn from_env() -> anyhow::Result<Self> {
+        let jwks_url = env::var("AUTH_JWKS_URL").ok();
+        let shared_secret = env::var("AUTH_SECRET").ok();
+
+        if jwks_url.is_none() && shared_secret.is_none() {
+            bail!("Either provide AUTH_JWKS_URL or AUTH_SECRET in the system environment");
+        }
+
+        let config = AuthenticatorConfig::new(
+            jwks_url,
+            shared_secret,
+            &env::var("AUTH_ALGORITHMS").ok().unwrap_or_default(),
+            &env::var("AUTH_ISSUER").ok().unwrap_or_default(),
+            &env::var("AUTH_AUDIENCE").ok().unwrap_or_default(),
+            env::var("DEFAULT_LOCALE")
+                .ok()
+                .unwrap_or_else(|| DEFAULT_LOCALE.to_string()),
+            env::var("AUTH_CUSTOM_CLAIM_PREFIX").ok(),
+        );
+
+        Ok(Self::new(config))
+    }
+
+    pub fn add_fetcher(&mut self, fetcher: Box<dyn ConfigFetcher>) {
+        self.fetchers.push(fetcher);
+    }
+
+    pub async fn parse_jwt(&self, jwt_token: &str) -> anyhow::Result<ClaimsSet> {
+        let claims = Self::decode_payload(jwt_token)
+            .context("Invalid JWT present")
+            .with_status(StatusCode::UNAUTHORIZED)?;
+
+        if let Some(config) = self.try_fetch_config(&claims).await {
+            Self::parse_validate_and_update(jwt_token, &config).await
+        } else {
+            Self::parse_validate_and_update(jwt_token, &self.config).await
+        }
+    }
+
+    fn decode_payload(jwt_token: &str) -> anyhow::Result<ClaimsSet> {
+        if let Some(payload) = jwt_token.split('.').skip(1).next() {
+            let decoded = URL_SAFE_NO_PAD
+                .decode(payload)
+                .context("Cannot decode Base64 payload")
+                .with_status(StatusCode::UNAUTHORIZED)?;
+            serde_json::from_slice(&decoded)
+                .context("Cannot parse payload as JSON")
+                .with_status(StatusCode::UNAUTHORIZED)
+        } else {
+            bail!("Cannot extract payload part")
+        }
+    }
+
+    async fn parse_validate_and_update(
+        jwt_token: &str,
+        config: &AuthenticatorConfig,
+    ) -> anyhow::Result<ClaimsSet> {
+        let mut claims = config.check_signature(jwt_token).await?;
+
+        if let Some(custom_claim_prefix) = &config.custom_claim_prefix {
+            claims = Self::translate_claims(claims, &custom_claim_prefix);
+        }
+
+        Self::inject_locale_if_missing(&mut claims, &config.default_locale);
+
+        Ok(claims)
+    }
+
+    async fn try_fetch_config(&self, claims_set: &ClaimsSet) -> Option<Arc<AuthenticatorConfig>> {
+        for fetcher in &self.fetchers {
+            if let Some(config) = fetcher.fetch(claims_set).await {
+                return Some(config);
+            }
+        }
+
+        None
+    }
+
+    fn translate_claims(claims: ClaimsSet, custom_claim_prefix: &str) -> ClaimsSet {
+        claims
+            .into_iter()
+            .map(|(key, value)| {
+                if key.starts_with(&custom_claim_prefix) {
+                    let new_key = key.trim_start_matches(&custom_claim_prefix).to_string();
+                    (new_key, value)
+                } else {
+                    (key, value)
+                }
+            })
+            .collect()
+    }
+
+    fn inject_locale_if_missing(claims: &mut ClaimsSet, default_locale: &str) {
+        if claims.get(CLAIM_LOCALE).is_none() {
+            claims.insert(
+                CLAIM_LOCALE.to_string(),
+                Value::String(default_locale.to_string()),
+            );
+        }
+    }
+}
+
 pub struct AuthenticatorConfig {
     hmac_based_key: Option<DecodingKey>,
     validation: Validation,
@@ -80,7 +213,7 @@ impl AuthenticatorConfig {
             .unwrap_or_else(Vec::default)
     }
 
-    async fn check_signature(&self, jwt_token: &str) -> anyhow::Result<()> {
+    async fn check_signature(&self, jwt_token: &str) -> anyhow::Result<ClaimsSet> {
         let header = decode_header(jwt_token)
             .context("Invalid JWT present")
             .with_status(StatusCode::UNAUTHORIZED)?;
@@ -102,13 +235,9 @@ impl AuthenticatorConfig {
                 .fetch_key(kid)
                 .await
                 .with_status(StatusCode::UNAUTHORIZED)?;
-            self.validate_signature(&header, &decoding_key, &jwt_token)?;
-
-            Ok(())
+            self.validate_signature(&header, &decoding_key, &jwt_token)
         } else if let Some(hmac) = &self.hmac_based_key {
-            self.validate_signature(&header, &hmac, &jwt_token)?;
-
-            Ok(())
+            self.validate_signature(&header, &hmac, &jwt_token)
         } else {
             status_bail!(
                 StatusCode::UNAUTHORIZED,
@@ -122,141 +251,14 @@ impl AuthenticatorConfig {
         header: &Header,
         decoding_key: &DecodingKey,
         jwt_token: &str,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<ClaimsSet> {
         let mut validation = self.validation.clone();
         validation.algorithms = vec![header.alg];
 
-        decode::<ClaimsSet>(jwt_token, decoding_key, &validation)
+        let token = decode::<ClaimsSet>(jwt_token, decoding_key, &validation)
             .context("Invalid JWT present")
             .with_status(StatusCode::UNAUTHORIZED)?;
 
-        Ok(())
-    }
-}
-
-#[async_trait]
-pub trait ConfigFetcher: Send + Sync {
-    async fn fetch(&self, claims: &ClaimsSet) -> Option<Arc<AuthenticatorConfig>>;
-}
-
-pub struct Authenticator {
-    config: Arc<AuthenticatorConfig>,
-    fetchers: Vec<Box<dyn ConfigFetcher>>,
-}
-
-impl Authenticator {
-    pub fn new(config: Arc<AuthenticatorConfig>) -> Self {
-        Authenticator {
-            config,
-            fetchers: Vec::new(),
-        }
-    }
-
-    #[cfg(test)]
-    pub fn with_simple_secret(secret: &str) -> Self {
-        Self::new(Arc::new(AuthenticatorConfig::new(
-            None::<&str>,
-            Some(secret),
-            "",
-            "",
-            "",
-            DEFAULT_LOCALE.to_string(),
-            None,
-        )))
-    }
-
-    pub fn from_env() -> anyhow::Result<Self> {
-        let jwks_url = env::var("AUTH_JWKS_URL").ok();
-        let shared_secret = env::var("AUTH_SECRET").ok();
-
-        if jwks_url.is_none() && shared_secret.is_none() {
-            bail!("Either provide AUTH_JWKS_URL or AUTH_SECRET in the system environment");
-        }
-
-        let config = AuthenticatorConfig::new(
-            jwks_url,
-            shared_secret,
-            &env::var("AUTH_ALGORITHMS").ok().unwrap_or_default(),
-            &env::var("AUTH_ISSUER").ok().unwrap_or_default(),
-            &env::var("AUTH_AUDIENCE").ok().unwrap_or_default(),
-            env::var("DEFAULT_LOCALE")
-                .ok()
-                .unwrap_or_else(|| DEFAULT_LOCALE.to_string()),
-            env::var("AUTH_CUSTOM_CLAIM_PREFIX").ok(),
-        );
-
-        Ok(Self::new(Arc::new(config)))
-    }
-
-    pub fn add_fetcher(&mut self, fetcher: Box<dyn ConfigFetcher>) {
-        self.fetchers.push(fetcher);
-    }
-
-    pub async fn parse_jwt(&self, jwt_token: &str) -> anyhow::Result<ClaimsSet> {
-        let mut claims = Self::decode_payload(jwt_token)
-            .context("Invalid JWT present")
-            .with_status(StatusCode::UNAUTHORIZED)?;
-
-        let config = self
-            .try_fetch_config(&claims)
-            .await
-            .unwrap_or(self.config.clone());
-
-        config.check_signature(jwt_token).await?;
-
-        if let Some(custom_claim_prefix) = &config.custom_claim_prefix {
-            claims = Self::translate_claims(claims, &custom_claim_prefix);
-        }
-
-        Self::inject_locale_if_missing(&mut claims, &config.default_locale);
-
-        Ok(claims)
-    }
-
-    fn decode_payload(jwt_token: &str) -> anyhow::Result<ClaimsSet> {
-        if let Some(payload) = jwt_token.split('.').skip(1).next() {
-            let decoded = URL_SAFE_NO_PAD
-                .decode(payload)
-                .context("Cannot decode Base64 payload")
-                .with_status(StatusCode::UNAUTHORIZED)?;
-            serde_json::from_slice(&decoded)
-                .context("Cannot parse payload as JSON")
-                .with_status(StatusCode::UNAUTHORIZED)
-        } else {
-            bail!("Cannot extract payload part")
-        }
-    }
-
-    async fn try_fetch_config(&self, claims_set: &ClaimsSet) -> Option<Arc<AuthenticatorConfig>> {
-        for fetcher in &self.fetchers {
-            if let Some(config) = fetcher.fetch(claims_set).await {
-                return Some(config);
-            }
-        }
-
-        None
-    }
-
-    fn translate_claims(claims: ClaimsSet, custom_claim_prefix: &str) -> ClaimsSet {
-        claims
-            .into_iter()
-            .map(|(key, value)| {
-                if key.starts_with(&custom_claim_prefix) {
-                    let new_key = key.trim_start_matches(&custom_claim_prefix).to_string();
-                    (new_key, value)
-                } else {
-                    (key, value)
-                }
-            })
-            .collect()
-    }
-
-    fn inject_locale_if_missing(claims: &mut ClaimsSet, default_locale: &str) {
-        if claims.get(CLAIM_LOCALE).is_none() {
-            claims.insert(
-                CLAIM_LOCALE.to_string(),
-                Value::String(default_locale.to_string()),
-            );
-        }
+        Ok(token.claims)
     }
 }
