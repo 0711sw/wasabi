@@ -1,6 +1,7 @@
 use crate::status_bail;
 use crate::web::auth::{
     CLAIM_ACT, CLAIM_EMAIL, CLAIM_LOCALE, CLAIM_NAME, CLAIM_PERMISSIONS, CLAIM_SUB, CLAIM_TENANT,
+    DEFAULT_LOCALE,
 };
 use crate::web::error::ResultExt;
 use crate::web::validation::{is_valid_id, is_valid_str};
@@ -10,9 +11,11 @@ use std::collections::{BTreeMap, HashSet};
 use std::fmt::{Debug, Formatter};
 use warp::http::StatusCode;
 
+pub(crate) type ClaimsSet = BTreeMap<String, Value>;
+
 #[derive(Clone)]
 pub struct User {
-    pub(crate) claims: BTreeMap<String, Value>,
+    pub(crate) claims: ClaimsSet,
 }
 
 impl User {
@@ -100,31 +103,43 @@ impl User {
         self.claims
             .get(CLAIM_LOCALE)
             .and_then(Value::as_str)
-            .unwrap_or("en-US")
+            .unwrap_or(DEFAULT_LOCALE)
     }
 }
 
 impl Debug for User {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         fn fmt_act(act: &Value, mut buffer: String) -> String {
-            if let Some(sub) = act.get(CLAIM_SUB).and_then(Value::as_str) {
-                if !buffer.is_empty() {
-                    buffer.push_str(", ")
+            if act.is_object() {
+                if let Some(sub) = act.get(CLAIM_SUB).and_then(Value::as_str) {
+                    if !buffer.is_empty() {
+                        buffer.push_str(", ")
+                    }
+                    buffer.push_str(sub);
+
+                    if let Some(tenant) = act.get(CLAIM_TENANT).and_then(Value::as_str) {
+                        buffer.push_str(" (tenant: ");
+                        buffer.push_str(tenant);
+                        buffer.push_str(")");
+                    }
                 }
-                buffer.push_str(sub);
+
+                if let Some(act) = act.get(CLAIM_ACT) {
+                    buffer = fmt_act(act, buffer);
+                }
+            } else if act.is_string() {
+                buffer.push_str(&act.as_str().unwrap_or_default());
+            } else {
+                buffer.push_str(&act.to_string());
             }
 
-            if let Some(act) = act.get(CLAIM_ACT) {
-                fmt_act(act, buffer)
-            } else {
-                buffer
-            }
+            buffer
         }
 
         if let Some(act) = self.claims.get(CLAIM_ACT) {
             write!(
                 f,
-                "{{\"tenant\": \"{}\", \"auth\": \"{}\", \"act\": \"{}\" }}",
+                "{{\"tenant\": \"{}\", \"sub\": \"{}\", \"act\": \"{}\" }}",
                 self.tenant_id().unwrap_or("?"),
                 self.user_id().unwrap_or("?"),
                 fmt_act(act, String::new())
@@ -132,10 +147,317 @@ impl Debug for User {
         } else {
             write!(
                 f,
-                "{{\"tenant\": \"{}\", \"auth\": \"{}\" }}",
+                "{{\"tenant\": \"{}\", \"sub\": \"{}\" }}",
                 self.tenant_id().unwrap_or("?"),
                 self.user_id().unwrap_or("?"),
             )
         }
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod tests {
+    use crate::web::auth::user::ClaimsSet;
+    use crate::web::auth::*;
+    use anyhow::Context;
+    use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
+    use serde_json::{json, Value};
+
+    pub struct Builder {
+        claims: ClaimsSet,
+    }
+
+    impl Builder {
+        pub fn new() -> Self {
+            Builder {
+                claims: ClaimsSet::new(),
+            }
+        }
+
+        pub fn with_string(mut self, key: &str, value: &str) -> Self {
+            self.claims.insert(key.to_owned(), Value::from(value));
+            self
+        }
+
+        pub fn with_value(mut self, key: &str, value: Value) -> Self {
+            self.claims.insert(key.to_owned(), value);
+            self
+        }
+
+        pub fn build_user(self) -> User {
+            User {
+                claims: self.claims,
+            }
+        }
+
+        pub fn into_token(self, secret: &str) -> Result<String, anyhow::Error> {
+            encode(
+                &Header::new(Algorithm::HS256),
+                &self.claims,
+                &EncodingKey::from_secret(secret.as_bytes()),
+            )
+            .context("Signing failed")
+        }
+    }
+    #[test]
+    fn simple_user_debug_formatting() {
+        let user = Builder::new()
+            .with_string(CLAIM_SUB, "1234")
+            .with_string(CLAIM_TENANT, "0815")
+            .build_user();
+
+        assert_eq!(
+            format!("{:?}", user),
+            "{\"tenant\": \"0815\", \"sub\": \"1234\" }"
+        );
+    }
+
+    #[test]
+    fn simple_delegate_user_debug_formatting() {
+        let user = Builder::new()
+            .with_string(CLAIM_SUB, "1234")
+            .with_string(CLAIM_TENANT, "0815")
+            .with_string(CLAIM_ACT, "sub1")
+            .build_user();
+
+        assert_eq!(
+            format!("{:?}", user),
+            "{\"tenant\": \"0815\", \"sub\": \"1234\", \"act\": \"sub1\" }"
+        );
+
+        let user = Builder::new()
+            .with_string(CLAIM_SUB, "1234")
+            .with_string(CLAIM_TENANT, "0815")
+            .with_value(CLAIM_ACT, json!(42))
+            .build_user();
+
+        assert_eq!(
+            format!("{:?}", user),
+            "{\"tenant\": \"0815\", \"sub\": \"1234\", \"act\": \"42\" }"
+        );
+    }
+
+    #[test]
+    fn complex_delegate_user_debug_formatting() {
+        let user = Builder::new()
+            .with_string(CLAIM_SUB, "1234")
+            .with_string(CLAIM_TENANT, "0815")
+            .with_value(CLAIM_ACT, json!({"sub": "sub1", "tenant": "tenant2"}))
+            .build_user();
+
+        assert_eq!(
+            format!("{:?}", user),
+            "{\"tenant\": \"0815\", \"sub\": \"1234\", \"act\": \"sub1 (tenant: tenant2)\" }"
+        );
+    }
+
+    #[test]
+    fn chained_delegate_user_debug_formatting() {
+        let user = Builder::new()
+            .with_string(CLAIM_SUB, "1234")
+            .with_string(CLAIM_TENANT, "0815")
+            .with_value(CLAIM_ACT, json!({"sub": "sub1", "act": {"sub": "sub2"}}))
+            .build_user();
+
+        assert_eq!(
+            format!("{:?}", user),
+            "{\"tenant\": \"0815\", \"sub\": \"1234\", \"act\": \"sub1, sub2\" }"
+        );
+    }
+
+    #[test]
+    fn user_tenant_id_returns_valid_tenant_id() {
+        let user = Builder::new()
+            .with_string(CLAIM_TENANT, "0815")
+            .build_user();
+
+        assert_eq!(user.tenant_id().unwrap(), "0815");
+    }
+
+    #[test]
+    fn user_tenant_id_fails_for_missing_tenant_id() {
+        let user = Builder::new().build_user();
+        assert!(user.tenant_id().is_err());
+    }
+
+    #[test]
+    fn user_tenant_id_fails_for_empty_tenant_id() {
+        let user = Builder::new().with_string(CLAIM_TENANT, "").build_user();
+        assert!(user.tenant_id().is_err());
+    }
+
+    #[test]
+    fn user_tenant_id_fails_for_tenant_id_exceeding_max_length() {
+        let user = Builder::new()
+            .with_string(CLAIM_TENANT, "a".repeat(65).as_str())
+            .build_user();
+        assert!(user.tenant_id().is_err());
+    }
+
+    #[test]
+    fn user_user_id_returns_valid_user_id() {
+        let user = Builder::new().with_string(CLAIM_SUB, "1234").build_user();
+
+        assert_eq!(user.user_id().unwrap(), "1234");
+    }
+
+    #[test]
+    fn user_user_id_fails_for_missing_user_id() {
+        let user = Builder::new().build_user();
+        assert!(user.user_id().is_err());
+    }
+
+    #[test]
+    fn user_user_id_fails_for_empty_user_id() {
+        let user = Builder::new().with_string(CLAIM_SUB, "").build_user();
+        assert!(user.user_id().is_err());
+    }
+
+    #[test]
+    fn user_user_id_fails_for_user_id_exceeding_max_length() {
+        let user = Builder::new()
+            .with_string(CLAIM_SUB, "a".repeat(65).as_str())
+            .build_user();
+        assert!(user.user_id().is_err());
+    }
+
+    #[test]
+    fn user_full_name_returns_valid_name() {
+        let user = Builder::new()
+            .with_string(CLAIM_NAME, "John Doe")
+            .build_user();
+
+        assert_eq!(user.full_name().unwrap(), "John Doe");
+    }
+
+    #[test]
+    fn user_full_name_fails_for_missing_name() {
+        let user = Builder::new().build_user();
+        assert!(user.full_name().is_err());
+    }
+
+    #[test]
+    fn user_full_name_fails_for_empty_name() {
+        let user = Builder::new().with_string(CLAIM_NAME, "").build_user();
+        assert!(user.full_name().is_err());
+    }
+
+    #[test]
+    fn user_full_name_fails_for_name_exceeding_max_length() {
+        let user = Builder::new()
+            .with_string(CLAIM_NAME, "a".repeat(513).as_str())
+            .build_user();
+        assert!(user.full_name().is_err());
+    }
+
+    #[test]
+    fn user_email_returns_valid_email() {
+        let user = Builder::new()
+            .with_string(CLAIM_EMAIL, "auth@example.com")
+            .build_user();
+
+        assert_eq!(user.email().unwrap(), "auth@example.com");
+    }
+
+    #[test]
+    fn user_email_fails_for_missing_email() {
+        let user = Builder::new().build_user();
+        assert!(user.email().is_err());
+    }
+
+    #[test]
+    fn user_email_fails_for_empty_email() {
+        let user = Builder::new().with_string(CLAIM_EMAIL, "").build_user();
+        assert!(user.email().is_err());
+    }
+
+    #[test]
+    fn user_email_fails_for_email_exceeding_max_length() {
+        let user = Builder::new()
+            .with_string(CLAIM_EMAIL, "a".repeat(513).as_str())
+            .build_user();
+        assert!(user.email().is_err());
+    }
+
+    #[test]
+    fn user_has_permission_returns_true_if_user_has_permission() {
+        let user = Builder::new()
+            .with_value(CLAIM_PERMISSIONS, json!(["permission1", "permission2"]))
+            .build_user();
+
+        assert!(user.has_any_permission(&[&"permission1"]));
+        assert!(user.has_any_permission(&[&"permission2"]));
+        assert!(user.has_any_permission(&[&"permission1", &"permission2"]));
+    }
+
+    #[test]
+    fn user_has_permission_returns_false_if_user_does_not_have_permission() {
+        let user = Builder::new()
+            .with_value(CLAIM_PERMISSIONS, json!(["permission1", "permission2"]))
+            .build_user();
+
+        assert!(!user.has_any_permission(&[&"permission3"]));
+        assert!(!user.has_any_permission(&[&"permission4"]));
+        assert!(!user.has_any_permission(&[&"permission3", &"permission4"]));
+    }
+
+    #[test]
+    fn user_has_permission_returns_false_if_no_permissions_claim_present() {
+        let user = Builder::new().build_user();
+
+        assert!(!user.has_any_permission(&[&"permission1"]));
+    }
+
+    #[test]
+    fn user_has_permission_returns_false_if_permissions_claim_is_not_an_array() {
+        let user = Builder::new()
+            .with_string(CLAIM_PERMISSIONS, "permission1")
+            .build_user();
+
+        assert!(!user.has_any_permission(&[&"permission1"]));
+    }
+
+    #[test]
+    fn user_enforce_permission_with_permission_succeeds() {
+        let user = Builder::new()
+            .with_value(CLAIM_PERMISSIONS, json!(["permission1", "permission2"]))
+            .build_user();
+
+        assert!(
+            user.clone()
+                .enforce_any_permission(&[&"permission1"])
+                .is_ok()
+        );
+        assert!(
+            user.clone()
+                .enforce_any_permission(&[&"permission2"])
+                .is_ok()
+        );
+        assert!(
+            user.enforce_any_permission(&[&"permissionX", &"permission1"])
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn user_enforce_permission_fails_if_permission_is_missing() {
+        let user = Builder::new()
+            .with_value(CLAIM_PERMISSIONS, json!(["permission1", "permission2"]))
+            .build_user();
+
+        assert_eq!(
+            user.clone()
+                .enforce_any_permission(&[&"permissionA"])
+                .unwrap_err()
+                .to_string(),
+            "The permission 'permissionA' is required for this action"
+        );
+
+        assert_eq!(
+            user.enforce_any_permission(&[&"permissionA", &"permissionB"])
+                .unwrap_err()
+                .to_string(),
+            "One of the permissions 'permissionA, permissionB' is required for this action"
+        );
     }
 }

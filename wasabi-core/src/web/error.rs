@@ -63,9 +63,9 @@ macro_rules! client_bail {
 #[macro_export]
 macro_rules! status_bail {
     ($status:expr, $msg:literal $(,)?) => {
-        return $crate::web::error::ResultExt::with_status(Err(::anyhow::anyhow!($msg)), $status);
+        return $crate::web::error::ResultExt::with_status(Err(::anyhow::anyhow!($msg)), $status)
     };
     ($status:expr, $fmt:literal, $($arg:tt)*) => {
-        return $crate::web::error::ResultExt::with_status(Err(::anyhow::anyhow!($fmt, $($arg)*)), $status);
+        return $crate::web::error::ResultExt::with_status(Err(::anyhow::anyhow!($fmt, $($arg)*)), $status)
     };
 }

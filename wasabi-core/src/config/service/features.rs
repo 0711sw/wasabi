@@ -62,7 +62,7 @@ struct FeatureUpdate {
 }
 
 pub fn get_granted_features_route(
-    authenticator: Arc<dyn Authenticator>,
+    authenticator: Arc<Authenticator>,
     required_permissions: &'static [&'static str],
     config_client: ConfigClient,
 ) -> BoxedFilter<(impl warp::Reply,)> {
@@ -105,7 +105,7 @@ async fn handle_get_granted_features(
 }
 
 pub fn post_granted_features_route(
-    authenticator: Arc<dyn Authenticator>,
+    authenticator: Arc<Authenticator>,
     required_permissions: &'static [&'static str],
     config_client: ConfigClient,
 ) -> BoxedFilter<(impl warp::Reply,)> {
@@ -154,7 +154,7 @@ async fn handle_post_granted_features(
 }
 
 pub fn get_enabled_features_route(
-    authenticator: Arc<dyn Authenticator>,
+    authenticator: Arc<Authenticator>,
     required_permissions: &'static [&'static str],
     config_client: ConfigClient,
 ) -> BoxedFilter<(impl warp::Reply,)> {
@@ -202,7 +202,7 @@ async fn handle_get_enabled_features(
 }
 
 pub fn post_enabled_features_route(
-    authenticator: Arc<dyn Authenticator>,
+    authenticator: Arc<Authenticator>,
     required_permissions: &'static [&'static str],
     config_client: ConfigClient,
 ) -> BoxedFilter<(impl warp::Reply,)> {

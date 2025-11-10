@@ -1,101 +1,243 @@
 use crate::status_bail;
-use crate::tools::not;
-use crate::web::auth::CLAIM_LOCALE;
 use crate::web::auth::jwks::{JwksCache, UrlJwksFetcher};
+use crate::web::auth::user::ClaimsSet;
+use crate::web::auth::{CLAIM_LOCALE, DEFAULT_LOCALE};
 use crate::web::error::ResultExt;
-use anyhow::{Context, bail};
+use anyhow::{bail, Context};
 use async_trait::async_trait;
-use jsonwebtoken::{Algorithm, DecodingKey, Validation, decode, decode_header};
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use base64::Engine;
+use jsonwebtoken::{decode, decode_header, Algorithm, DecodingKey, Header, Validation};
 use serde_json::Value;
-use std::collections::{BTreeMap, HashSet};
+use std::collections::HashSet;
 use std::env;
+use std::str::FromStr;
 use std::sync::Arc;
 use warp::http::StatusCode;
 
-#[async_trait]
-pub trait Authenticator: Send + Sync {
-    async fn parse_jwt(&self, jwt_token: &str) -> anyhow::Result<BTreeMap<String, Value>>;
-}
-
-#[derive(Clone)]
-pub struct SimpleAuthenticator {
-    key: Arc<DecodingKey>,
-}
-
-#[async_trait]
-impl Authenticator for SimpleAuthenticator {
-    async fn parse_jwt(&self, jwt_token: &str) -> anyhow::Result<BTreeMap<String, Value>> {
-        let mut validation = Validation::new(Algorithm::HS256);
-        validation.validate_exp = true;
-        validation.validate_aud = false;
-        validation.required_spec_claims.clear();
-
-        let claims: BTreeMap<String, Value> =
-            match decode::<BTreeMap<String, Value>>(jwt_token, &self.key, &validation) {
-                Ok(claims) => claims.claims,
-                Err(err) => {
-                    status_bail!(StatusCode::UNAUTHORIZED, "Invalid JWT present: {}", err);
-                }
-            };
-
-        Ok(claims)
-    }
-}
-
-impl SimpleAuthenticator {
-    pub fn new(key: &str) -> SimpleAuthenticator {
-        Self {
-            key: Arc::new(DecodingKey::from_secret(key.as_bytes())),
-        }
-    }
-}
-
-#[derive(Clone)]
-pub struct JwtsAuthenticator {
-    data: Arc<JwtsAuthenticatorData>,
-}
-
-struct JwtsAuthenticatorData {
-    cache: JwksCache,
+pub struct AuthenticatorConfig {
+    hmac_based_key: Option<DecodingKey>,
     validation: Validation,
     default_locale: String,
     custom_claim_prefix: Option<String>,
+    jwks_cache: Option<JwksCache>,
 }
 
-#[async_trait]
-impl Authenticator for JwtsAuthenticator {
-    async fn parse_jwt(&self, jwt_token: &str) -> anyhow::Result<BTreeMap<String, Value>> {
+impl AuthenticatorConfig {
+    pub fn new(
+        jwks_url: Option<impl ToString>,
+        shared_secret: Option<impl AsRef<str>>,
+        algorithms: &str,
+        issuer: &str,
+        audience: &str,
+        default_locale: String,
+        custom_claim_prefix: Option<String>,
+    ) -> Self {
+        AuthenticatorConfig {
+            hmac_based_key: shared_secret
+                .map(|str| DecodingKey::from_secret(str.as_ref().as_bytes())),
+            jwks_cache: jwks_url
+                .map(|url| JwksCache::new(Box::new(UrlJwksFetcher::new(url.to_string())))),
+            default_locale,
+            custom_claim_prefix,
+            validation: Self::build_validation(algorithms, issuer, audience),
+        }
+    }
+
+    fn build_validation(algorithms: &str, issuer: &str, audience: &str) -> Validation {
+        let mut validation = Validation::default();
+
+        #[cfg(test)]
+        validation.required_spec_claims.clear();
+
+        validation.validate_nbf = true;
+        validation.algorithms = Self::parse_algorithms(algorithms);
+        validation.iss = Self::parse_set(issuer);
+        validation.aud = Self::parse_set(audience);
+
+        validation
+    }
+
+    fn parse_set(values: &str) -> Option<HashSet<String>> {
+        Some(
+            values
+                .split(',')
+                .flat_map(|part| part.split(';'))
+                .map(str::trim)
+                .map(String::from)
+                .collect::<HashSet<String>>(),
+        )
+        .filter(|set| !set.is_empty())
+    }
+
+    fn parse_algorithms(algorithms: &str) -> Vec<Algorithm> {
+        Self::parse_set(algorithms)
+            .map(|set| {
+                set.iter()
+                    .filter_map(|alg| Algorithm::from_str(alg).ok())
+                    .collect::<Vec<Algorithm>>()
+            })
+            .unwrap_or_else(Vec::default)
+    }
+
+    async fn check_signature(&self, jwt_token: &str) -> anyhow::Result<()> {
         let header = decode_header(jwt_token)
             .context("Invalid JWT present")
             .with_status(StatusCode::UNAUTHORIZED)?;
-        let kid = header
-            .kid
-            .as_ref()
-            .context("JWT token header does not contain 'kid'")
-            .with_status(StatusCode::UNAUTHORIZED)?;
 
-        let key = self.data.cache.fetch_key(kid).await?;
-
-        let mut claims = decode::<BTreeMap<String, Value>>(jwt_token, &key, &self.data.validation)
-            .context("Failed to validate JWT token with JWKS key")
-            .with_status(StatusCode::UNAUTHORIZED)?
-            .claims;
-
-        if let Some(custom_claim_prefix) = &self.data.custom_claim_prefix {
-            claims = Self::translate_claims(claims, &custom_claim_prefix);
+        if !self.validation.algorithms.is_empty()
+            && !self.validation.algorithms.contains(&header.alg)
+        {
+            status_bail!(
+                StatusCode::UNAUTHORIZED,
+                "Invalid JWT present: Unsupported algorithm: {:?}",
+                header.alg
+            );
         }
 
-        Self::inject_locale_if_missing(&mut claims, &self.data.default_locale);
+        if let Some(jwks_cache) = &self.jwks_cache
+            && let Some(kid) = &header.kid
+        {
+            let decoding_key = jwks_cache
+                .fetch_key(kid)
+                .await
+                .with_status(StatusCode::UNAUTHORIZED)?;
+            self.validate_signature(&header, &decoding_key, &jwt_token)?;
 
-        Ok(claims)
+            Ok(())
+        } else if let Some(hmac) = &self.hmac_based_key {
+            self.validate_signature(&header, &hmac, &jwt_token)?;
+
+            Ok(())
+        } else {
+            status_bail!(
+                StatusCode::UNAUTHORIZED,
+                "Invalid JWT present: No matching authentication mechanism found"
+            )
+        }
+    }
+
+    fn validate_signature(
+        &self,
+        header: &Header,
+        decoding_key: &DecodingKey,
+        jwt_token: &str,
+    ) -> anyhow::Result<()> {
+        let mut validation = self.validation.clone();
+        validation.algorithms = vec![header.alg];
+
+        decode::<ClaimsSet>(jwt_token, decoding_key, &validation)
+            .context("Invalid JWT present")
+            .with_status(StatusCode::UNAUTHORIZED)?;
+
+        Ok(())
     }
 }
 
-impl JwtsAuthenticator {
-    fn translate_claims(
-        claims: BTreeMap<String, Value>,
-        custom_claim_prefix: &str,
-    ) -> BTreeMap<String, Value> {
+#[async_trait]
+pub trait ConfigFetcher: Send + Sync {
+    async fn fetch(&self, claims: &ClaimsSet) -> Option<Arc<AuthenticatorConfig>>;
+}
+
+pub struct Authenticator {
+    config: Arc<AuthenticatorConfig>,
+    fetchers: Vec<Box<dyn ConfigFetcher>>,
+}
+
+impl Authenticator {
+    pub fn new(config: Arc<AuthenticatorConfig>) -> Self {
+        Authenticator {
+            config,
+            fetchers: Vec::new(),
+        }
+    }
+
+    #[cfg(test)]
+    pub fn with_simple_secret(secret: &str) -> Self {
+        Self::new(Arc::new(AuthenticatorConfig::new(
+            None::<&str>,
+            Some(secret),
+            "",
+            "",
+            "",
+            DEFAULT_LOCALE.to_string(),
+            None,
+        )))
+    }
+
+    pub fn from_env() -> anyhow::Result<Self> {
+        let jwks_url = env::var("AUTH_JWKS_URL").ok();
+        let shared_secret = env::var("AUTH_SECRET").ok();
+
+        if jwks_url.is_none() && shared_secret.is_none() {
+            bail!("Either provide AUTH_JWKS_URL or AUTH_SECRET in the system environment");
+        }
+
+        let config = AuthenticatorConfig::new(
+            jwks_url,
+            shared_secret,
+            &env::var("AUTH_ALGORITHMS").ok().unwrap_or_default(),
+            &env::var("AUTH_ISSUER").ok().unwrap_or_default(),
+            &env::var("AUTH_AUDIENCE").ok().unwrap_or_default(),
+            env::var("DEFAULT_LOCALE")
+                .ok()
+                .unwrap_or_else(|| DEFAULT_LOCALE.to_string()),
+            env::var("AUTH_CUSTOM_CLAIM_PREFIX").ok(),
+        );
+
+        Ok(Self::new(Arc::new(config)))
+    }
+
+    pub fn add_fetcher(&mut self, fetcher: Box<dyn ConfigFetcher>) {
+        self.fetchers.push(fetcher);
+    }
+
+    pub async fn parse_jwt(&self, jwt_token: &str) -> anyhow::Result<ClaimsSet> {
+        let mut claims = Self::decode_payload(jwt_token)
+            .context("Invalid JWT present")
+            .with_status(StatusCode::UNAUTHORIZED)?;
+
+        let config = self
+            .try_fetch_config(&claims)
+            .await
+            .unwrap_or(self.config.clone());
+
+        config.check_signature(jwt_token).await?;
+
+        if let Some(custom_claim_prefix) = &config.custom_claim_prefix {
+            claims = Self::translate_claims(claims, &custom_claim_prefix);
+        }
+
+        Self::inject_locale_if_missing(&mut claims, &config.default_locale);
+
+        Ok(claims)
+    }
+
+    fn decode_payload(jwt_token: &str) -> anyhow::Result<ClaimsSet> {
+        if let Some(payload) = jwt_token.split('.').skip(1).next() {
+            let decoded = URL_SAFE_NO_PAD
+                .decode(payload)
+                .context("Cannot decode Base64 payload")
+                .with_status(StatusCode::UNAUTHORIZED)?;
+            serde_json::from_slice(&decoded)
+                .context("Cannot parse payload as JSON")
+                .with_status(StatusCode::UNAUTHORIZED)
+        } else {
+            bail!("Cannot extract payload part")
+        }
+    }
+
+    async fn try_fetch_config(&self, claims_set: &ClaimsSet) -> Option<Arc<AuthenticatorConfig>> {
+        for fetcher in &self.fetchers {
+            if let Some(config) = fetcher.fetch(claims_set).await {
+                return Some(config);
+            }
+        }
+
+        None
+    }
+
+    fn translate_claims(claims: ClaimsSet, custom_claim_prefix: &str) -> ClaimsSet {
         claims
             .into_iter()
             .map(|(key, value)| {
@@ -109,7 +251,7 @@ impl JwtsAuthenticator {
             .collect()
     }
 
-    fn inject_locale_if_missing(claims: &mut BTreeMap<String, Value>, default_locale: &str) {
+    fn inject_locale_if_missing(claims: &mut ClaimsSet, default_locale: &str) {
         if claims.get(CLAIM_LOCALE).is_none() {
             claims.insert(
                 CLAIM_LOCALE.to_string(),
@@ -117,55 +259,4 @@ impl JwtsAuthenticator {
             );
         }
     }
-}
-
-pub fn from_env() -> anyhow::Result<Arc<dyn Authenticator>> {
-    if let Ok(url) = env::var("AUTH_JWKS_URL") {
-        let authenticator = JwtsAuthenticator {
-            data: Arc::new(JwtsAuthenticatorData {
-                cache: JwksCache::new(Box::new(UrlJwksFetcher::new(url))),
-                validation: load_validation_from_env()?,
-                default_locale: env::var("DEFAULT_LOCALE")
-                    .ok()
-                    .unwrap_or_else(|| "en-US".to_string()),
-                custom_claim_prefix: env::var("AUTH_CUSTOM_CLAIM_PREFIX").ok(),
-            }),
-        };
-        Ok(Arc::new(authenticator))
-    } else if let Ok(secret) = env::var("AUTH_SECRET") {
-        Ok(Arc::new(SimpleAuthenticator::new(&secret)))
-    } else {
-        bail!(
-            "No authentication method configured. Set either AUTH_JWKS_URL or AUTH_SECRET in the environment."
-        );
-    }
-}
-
-fn load_validation_from_env() -> anyhow::Result<Validation> {
-    let mut validation = Validation::new(Algorithm::RS256);
-    validation.validate_nbf = true;
-
-    let audiences = env::var("AUTH_AUDIENCE")
-        .ok()
-        .map(parse_set)
-        .filter(not(HashSet::is_empty))
-        .context("Please provider AUTH_AUDIENCE in the environment")?;
-    validation.aud = Some(audiences);
-
-    let issuers = env::var("AUTH_ISSUER")
-        .ok()
-        .map(parse_set)
-        .filter(not(HashSet::is_empty))
-        .context("Please provider AUTH_ISSUER in the environment")?;
-    validation.iss = Some(issuers);
-
-    Ok(validation)
-}
-
-fn parse_set(values: String) -> HashSet<String> {
-    values
-        .split(',')
-        .map(str::trim)
-        .map(String::from)
-        .collect::<HashSet<String>>()
 }

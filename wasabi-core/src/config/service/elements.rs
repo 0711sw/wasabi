@@ -41,7 +41,7 @@ struct ModuleInfo {
 }
 
 pub fn get_elements_route(
-    authenticator: Arc<dyn Authenticator>,
+    authenticator: Arc<Authenticator>,
     required_permissions: &'static [&'static str],
     config_client: ConfigClient,
 ) -> BoxedFilter<(impl warp::Reply,)> {
@@ -200,7 +200,7 @@ async fn fetch_module_info(
 }
 
 pub fn put_element_route(
-    authenticator: Arc<dyn Authenticator>,
+    authenticator: Arc<Authenticator>,
     required_permissions: &'static [&'static str],
     config_client: ConfigClient,
 ) -> BoxedFilter<(impl warp::Reply,)> {
@@ -267,7 +267,7 @@ async fn handle_put_element(
 }
 
 pub fn delete_element_route(
-    authenticator: Arc<dyn Authenticator>,
+    authenticator: Arc<Authenticator>,
     required_permissions: &'static [&'static str],
     config_client: ConfigClient,
 ) -> BoxedFilter<(impl warp::Reply,)> {
