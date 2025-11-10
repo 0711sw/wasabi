@@ -10,6 +10,7 @@ use std::sync::Arc;
 use mock_instant::global::SystemTime;
 #[cfg(not(test))]
 use std::time::SystemTime;
+use reqwest::Client;
 
 pub(crate) type KeyCache = HashMap<String, Arc<DecodingKey>>;
 
@@ -25,7 +26,10 @@ pub struct UrlJwksFetcher {
 #[async_trait]
 impl JwksFetcher for UrlJwksFetcher {
     async fn fetch(&self) -> anyhow::Result<KeyCache> {
-        let jwks = Jwks::from_jwks_url(&self.url)
+        // Note that we pass a custom client in here, so that our dependency "reqwest"
+        // is actually marked as used. We need this dependency to activate "rustls-tls" as
+        // feature, as JWKS itself has all default features turned off...
+        let jwks = Jwks::from_jwks_url_with_client(&Client::default(), &self.url)
             .await
             .with_context(|| format!("Failed to fetch JWKS from: {}", self.url))?;
 
