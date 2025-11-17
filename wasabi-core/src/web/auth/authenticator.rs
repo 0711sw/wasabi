@@ -188,6 +188,15 @@ impl AuthenticatorConfig {
         validation.iss = Self::parse_set(issuer);
         validation.aud = Self::parse_set(audience);
 
+        // If we chose to leave the required audiences empty, we skip validation entirely as
+        // otherwise, the JWT library will always report an error even if no audience is given and
+        // none is requested.
+        validation.validate_aud = validation
+            .aud
+            .as_ref()
+            .map(|aud| !aud.is_empty())
+            .unwrap_or(false);
+
         validation
     }
 
@@ -198,6 +207,7 @@ impl AuthenticatorConfig {
                 .flat_map(|part| part.split(';'))
                 .map(str::trim)
                 .map(String::from)
+                .filter(|s| !s.is_empty())
                 .collect::<HashSet<String>>(),
         )
         .filter(|set| !set.is_empty())
