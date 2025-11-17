@@ -50,7 +50,7 @@ pub fn compile(source: &str, engine: Engine) -> CompilationResult {
 
 #[cfg(test)]
 mod tests {
-    use crate::scripts::compiler::{compile, CompilationResult};
+    use crate::scripts::compiler::{CompilationResult, compile};
     use crate::scripts::env::engine::EngineBuilder;
     use crate::scripts::value::Value;
     use crate::web::auth::user::User;
@@ -75,15 +75,18 @@ mod tests {
         );
 
         let mut claims = BTreeMap::new();
-        claims.insert("sub".to_string(),serde_json::Value::String("AAA".to_string()));
-            let u = User { claims };
+        claims.insert(
+            "sub".to_string(),
+            serde_json::Value::String("AAA".to_string()),
+        );
+        let u = User { claims };
 
         match result {
             CompilationResult::Ok(script, msg) => {
-                let x = script
-                    .find_function("test")
-                    .unwrap()
-                    .eval_sync(vec![Value::Number(Decimal::from(9))], vec![Box::new(u.clone())]);
+                let x = script.find_function("test").unwrap().eval_sync(
+                    vec![Value::Number(Decimal::from(9))],
+                    vec![Box::new(u.clone())],
+                );
                 dbg!(msg);
                 dbg!(x);
             }

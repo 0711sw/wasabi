@@ -3,11 +3,11 @@ use crate::web::auth::jwks::{JwksCache, UrlJwksFetcher};
 use crate::web::auth::user::ClaimsSet;
 use crate::web::auth::{CLAIM_LOCALE, DEFAULT_LOCALE};
 use crate::web::error::ResultExt;
-use anyhow::{bail, Context};
+use anyhow::{Context, bail};
 use async_trait::async_trait;
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
-use jsonwebtoken::{decode, decode_header, Algorithm, DecodingKey, Header, Validation};
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use jsonwebtoken::{Algorithm, DecodingKey, Header, Validation, decode, decode_header};
 use serde_json::Value;
 use std::collections::HashSet;
 use std::env;
@@ -86,7 +86,7 @@ impl Authenticator {
     }
 
     fn decode_payload(jwt_token: &str) -> anyhow::Result<ClaimsSet> {
-        if let Some(payload) = jwt_token.split('.').skip(1).next() {
+        if let Some(payload) = jwt_token.split('.').nth(1) {
             let decoded = URL_SAFE_NO_PAD
                 .decode(payload)
                 .context("Cannot decode Base64 payload")
@@ -106,7 +106,7 @@ impl Authenticator {
         let mut claims = config.check_signature(jwt_token).await?;
 
         if let Some(custom_claim_prefix) = &config.custom_claim_prefix {
-            claims = Self::translate_claims(claims, &custom_claim_prefix);
+            claims = Self::translate_claims(claims, custom_claim_prefix);
         }
 
         Self::inject_locale_if_missing(&mut claims, &config.default_locale);
@@ -128,8 +128,8 @@ impl Authenticator {
         claims
             .into_iter()
             .map(|(key, value)| {
-                if key.starts_with(&custom_claim_prefix) {
-                    let new_key = key.trim_start_matches(&custom_claim_prefix).to_string();
+                if key.starts_with(custom_claim_prefix) {
+                    let new_key = key.trim_start_matches(custom_claim_prefix).to_string();
                     (new_key, value)
                 } else {
                     (key, value)
@@ -210,7 +210,7 @@ impl AuthenticatorConfig {
                     .filter_map(|alg| Algorithm::from_str(alg).ok())
                     .collect::<Vec<Algorithm>>()
             })
-            .unwrap_or_else(Vec::default)
+            .unwrap_or_default()
     }
 
     async fn check_signature(&self, jwt_token: &str) -> anyhow::Result<ClaimsSet> {
@@ -235,9 +235,9 @@ impl AuthenticatorConfig {
                 .fetch_key(kid)
                 .await
                 .with_status(StatusCode::UNAUTHORIZED)?;
-            self.validate_signature(&header, &decoding_key, &jwt_token)
+            self.validate_signature(&header, &decoding_key, jwt_token)
         } else if let Some(hmac) = &self.hmac_based_key {
-            self.validate_signature(&header, &hmac, &jwt_token)
+            self.validate_signature(&header, hmac, jwt_token)
         } else {
             status_bail!(
                 StatusCode::UNAUTHORIZED,

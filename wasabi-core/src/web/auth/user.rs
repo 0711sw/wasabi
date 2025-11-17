@@ -120,7 +120,7 @@ impl Debug for User {
                     if let Some(tenant) = act.get(CLAIM_TENANT).and_then(Value::as_str) {
                         buffer.push_str(" (tenant: ");
                         buffer.push_str(tenant);
-                        buffer.push_str(")");
+                        buffer.push(')');
                     }
                 }
 
@@ -128,7 +128,7 @@ impl Debug for User {
                     buffer = fmt_act(act, buffer);
                 }
             } else if act.is_string() {
-                buffer.push_str(&act.as_str().unwrap_or_default());
+                buffer.push_str(act.as_str().unwrap_or_default());
             } else {
                 buffer.push_str(&act.to_string());
             }
@@ -160,8 +160,8 @@ pub(crate) mod tests {
     use crate::web::auth::user::ClaimsSet;
     use crate::web::auth::*;
     use anyhow::Context;
-    use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
-    use serde_json::{json, Value};
+    use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
+    use serde_json::{Value, json};
 
     pub struct Builder {
         claims: ClaimsSet,

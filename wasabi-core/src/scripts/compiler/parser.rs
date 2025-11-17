@@ -4,8 +4,8 @@ use crate::scripts::compiler::ast::{
 use crate::scripts::compiler::context::CompilationContext;
 use crate::scripts::compiler::span::ByteSpan;
 use crate::scripts::compiler::tokenizer::{Token, Tokenizer};
-use crate::scripts::value::core::TYPE_NULL;
 use crate::scripts::value::Value;
+use crate::scripts::value::core::TYPE_NULL;
 use rust_decimal::Decimal;
 use std::str::FromStr;
 

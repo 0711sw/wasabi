@@ -1,11 +1,11 @@
-use crate::scripts::compiler::{compile, CompilationResult};
+use crate::scripts::compiler::{CompilationResult, compile};
 use crate::scripts::env::function::{Function, FunctionFlags, ScriptFn};
+use crate::scripts::value::TypeName;
 use crate::scripts::value::boolean::define_boolean_type;
 use crate::scripts::value::core::define_core_types;
 use crate::scripts::value::list::define_list_type;
 use crate::scripts::value::number::define_number_type;
 use crate::scripts::value::string::define_string_type;
-use crate::scripts::value::TypeName;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -80,7 +80,7 @@ impl Engine {
     pub(crate) fn find_function(&self, name: &str) -> Option<&Function> {
         self.inner.functions.get(name)
     }
-    
+
     pub fn compile(&self, source: impl AsRef<str>) -> CompilationResult {
         compile(source.as_ref(), self.clone())
     }

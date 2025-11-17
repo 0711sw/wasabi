@@ -1,12 +1,13 @@
-use serde::Deserialize;
 use serde::de::{Error, MapAccess, Visitor};
 use serde::ser::SerializeMap;
+use serde::Deserialize;
 use serde::{Deserializer, Serialize, Serializer};
 use std::collections::HashMap;
 use std::fmt;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub enum I18nString {
+    #[default]
     Empty,
     Simple(String),
     Translations {
@@ -118,7 +119,7 @@ impl<'de> Visitor<'de> for I18nStringVisitor {
         while let Some((key, value)) = map.next_entry::<String, String>()? {
             if key == DEFAULT_LANGUAGE {
                 standard = Some(value);
-            } else if value.len() > 0 {
+            } else if !value.is_empty() {
                 translations.insert(key, value);
             }
         }
@@ -148,12 +149,6 @@ impl<'de> Deserialize<'de> for I18nString {
         D: Deserializer<'de>,
     {
         deserializer.deserialize_any(I18nStringVisitor)
-    }
-}
-
-impl Default for I18nString {
-    fn default() -> Self {
-        I18nString::Empty
     }
 }
 

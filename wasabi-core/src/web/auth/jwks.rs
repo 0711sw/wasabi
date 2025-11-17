@@ -1,4 +1,4 @@
-use anyhow::{Context, bail};
+use anyhow::{bail, Context};
 use arc_swap::ArcSwapOption;
 use async_trait::async_trait;
 use jsonwebtoken::DecodingKey;
@@ -8,9 +8,9 @@ use std::sync::Arc;
 
 #[cfg(test)]
 use mock_instant::global::SystemTime;
+use reqwest::Client;
 #[cfg(not(test))]
 use std::time::SystemTime;
-use reqwest::Client;
 
 pub(crate) type KeyCache = HashMap<String, Arc<DecodingKey>>;
 
@@ -85,10 +85,11 @@ impl JwksCache {
                 || last_loaded_seconds > MIN_WAIT_BETWEEN_LOADS_SECONDS)
         {
             self.last_load.store(Some(Arc::new(SystemTime::now())));
-            let keys = self.fetcher.fetch().await.map_err(|err| {
-                self.cached_keys.store(None);
-                err
-            })?;
+            let keys = self
+                .fetcher
+                .fetch()
+                .await
+                .inspect_err(|_| self.cached_keys.store(None))?;
             cached_keys = Some(Arc::new(keys));
             self.cached_keys.store(cached_keys.clone());
         }

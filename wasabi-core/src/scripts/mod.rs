@@ -1,5 +1,4 @@
-pub mod value;
+pub mod compiler;
 pub mod env;
 pub mod eval;
-pub mod compiler;
-
+pub mod value;

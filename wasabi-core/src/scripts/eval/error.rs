@@ -1,6 +1,6 @@
 use crate::scripts::compiler::span::ByteSpan;
-use crate::scripts::value::core::TYPE_ANY;
 use crate::scripts::value::TypeName;
+use crate::scripts::value::core::TYPE_ANY;
 
 #[derive(Debug)]
 pub struct ScriptError {

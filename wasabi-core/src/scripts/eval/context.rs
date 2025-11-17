@@ -1,6 +1,6 @@
 use crate::scripts::eval::error::{ScriptError, ScriptResult};
 use crate::scripts::value::Value;
-use std::any::{type_name, Any};
+use std::any::{Any, type_name};
 
 pub struct Context {
     locals: Vec<Value>,
@@ -25,11 +25,11 @@ impl Context {
     }
 
     pub(crate) fn write(&mut self, index: usize, value: Value) -> ScriptResult<Value> {
-        *self.locals.get_mut(index).ok_or_else(|| {
-            ScriptError::engine_err(format!(
-                "Invalid local index {index}",
-            ))
-        })? = value.clone();
+        *self
+            .locals
+            .get_mut(index)
+            .ok_or_else(|| ScriptError::engine_err(format!("Invalid local index {index}",)))? =
+            value.clone();
 
         Ok(value)
     }

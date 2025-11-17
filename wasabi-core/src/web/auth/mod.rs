@@ -2,8 +2,8 @@ use crate::status_bail;
 use crate::web::auth::authenticator::Authenticator;
 use crate::web::auth::user::User;
 use crate::web::warp::{into_rejection, with_cloneable};
-use std::sync::Arc;
 use serde::Deserialize;
+use std::sync::Arc;
 use warp::http::StatusCode;
 use warp::{Filter, Rejection};
 
@@ -40,11 +40,13 @@ pub fn with_user(
         ))
         .and(warp::query::<TokenInQueryString>())
         .and(with_cloneable(authenticator))
-        .and_then(|authorization : Option<String>, query_string: TokenInQueryString, authenticator| async {
-            parse_jwt_token(authorization.or(query_string.jwt), authenticator)
-                .await
-                .map_err(into_rejection)
-        })
+        .and_then(
+            |authorization: Option<String>, query_string: TokenInQueryString, authenticator| async {
+                parse_jwt_token(authorization.or(query_string.jwt), authenticator)
+                    .await
+                    .map_err(into_rejection)
+            },
+        )
 }
 
 pub fn with_user_with_any_permission(
@@ -89,13 +91,16 @@ async fn parse_jwt_token(
 }
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-    use hyper::StatusCode;
-    use serde_json::json;
-    use crate::web::auth::{parse_jwt_token, with_user, with_user_with_any_permission, CLAIM_NAME, CLAIM_PERMISSIONS, CLAIM_SUB, CLAIM_TENANT};
     use crate::web::auth::authenticator::Authenticator;
     use crate::web::auth::user::tests::Builder;
+    use crate::web::auth::{
+        CLAIM_NAME, CLAIM_PERMISSIONS, CLAIM_SUB, CLAIM_TENANT, parse_jwt_token, with_user,
+        with_user_with_any_permission,
+    };
     use crate::web::error::ApiError;
+    use hyper::StatusCode;
+    use serde_json::json;
+    use std::sync::Arc;
 
     #[tokio::test]
     async fn with_user_succeeds_with_valid_token() {
@@ -132,7 +137,8 @@ mod tests {
         let authenticator = Arc::new(Authenticator::with_simple_secret("some-secret"));
         let filter = with_user(authenticator);
 
-        let res = warp::test::request().path(&format!("/?jwt={token}"))
+        let res = warp::test::request()
+            .path(&format!("/?jwt={token}"))
             .filter(&filter)
             .await;
 

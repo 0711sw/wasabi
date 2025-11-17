@@ -174,7 +174,6 @@ impl Tokenizer {
             self.position += 1;
         }
     }
-
 }
 
 #[cfg(test)]
@@ -189,6 +188,4 @@ mod tests {
 
         assert_eq!(tokenizer.current_token(), Token::KeywordIf);
     }
-
-
 }

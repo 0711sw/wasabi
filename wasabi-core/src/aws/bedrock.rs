@@ -21,9 +21,9 @@ pub struct ToolUse {
     input: String,
 }
 
-impl Into<Event> for ModelEvent {
-    fn into(self) -> Event {
-        match &self {
+impl From<ModelEvent> for Event {
+    fn from(val: ModelEvent) -> Self {
+        match &val {
             ModelEvent::Text(chunk) => Event::default()
                 .event("content")
                 .json_data(json!({ "text": chunk }))
@@ -57,10 +57,10 @@ pub async fn read_next_event(receiver: &mut Receiver) -> Result<ModelEvent, Stri
         match receiver.recv().await {
             Ok(Some(output)) => match output {
                 ConverseStreamOutput::ContentBlockDelta(delta) => {
-                    if let Some(delta) = delta.delta() {
-                        if let Ok(text) = delta.as_text() {
-                            return Ok(ModelEvent::Text(text.to_owned()));
-                        }
+                    if let Some(delta) = delta.delta()
+                        && let Ok(text) = delta.as_text()
+                    {
+                        return Ok(ModelEvent::Text(text.to_owned()));
                     }
                 }
                 ConverseStreamOutput::ContentBlockStart(block_start) => {
@@ -97,10 +97,10 @@ async fn read_tool_use(
         match receiver.recv().await {
             Ok(Some(output)) => match output {
                 ConverseStreamOutput::ContentBlockDelta(delta) => {
-                    if let Some(delta) = delta.delta() {
-                        if let Ok(text) = delta.as_tool_use() {
-                            input.push_str(text.input());
-                        }
+                    if let Some(delta) = delta.delta()
+                        && let Ok(text) = delta.as_tool_use()
+                    {
+                        input.push_str(text.input());
                     }
                 }
                 ConverseStreamOutput::ContentBlockStop(_)
