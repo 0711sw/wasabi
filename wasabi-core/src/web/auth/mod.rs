@@ -87,7 +87,7 @@ async fn parse_jwt_token(
     };
 
     let claims = auth.parse_jwt(&jwt_token).await?;
-    Ok(User { claims })
+    Ok(User { jwt_token, claims })
 }
 #[cfg(test)]
 mod tests {

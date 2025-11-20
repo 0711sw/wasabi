@@ -15,6 +15,7 @@ pub(crate) type ClaimsSet = BTreeMap<String, Value>;
 
 #[derive(Clone)]
 pub struct User {
+    pub jwt_token: String,
     pub(crate) claims: ClaimsSet,
 }
 
@@ -164,12 +165,14 @@ pub(crate) mod tests {
     use serde_json::{Value, json};
 
     pub struct Builder {
+        jwt_token: String,
         claims: ClaimsSet,
     }
 
     impl Builder {
         pub fn new() -> Self {
             Builder {
+                jwt_token: String::new(),
                 claims: ClaimsSet::new(),
             }
         }
@@ -184,8 +187,14 @@ pub(crate) mod tests {
             self
         }
 
+        pub fn with_jwt_token(mut self, token: impl ToString) -> Self {
+            self.jwt_token = token.to_string();
+            self
+        }
+
         pub fn build_user(self) -> User {
             User {
+                jwt_token: self.jwt_token,
                 claims: self.claims,
             }
         }
