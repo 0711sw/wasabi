@@ -1,4 +1,4 @@
-use anyhow::{bail, Context};
+use anyhow::{Context, bail};
 use arc_swap::ArcSwapOption;
 use async_trait::async_trait;
 use jsonwebtoken::DecodingKey;

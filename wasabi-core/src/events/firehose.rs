@@ -2,8 +2,11 @@ use crate::events::{Event, EventRecorder};
 use crate::tools::system;
 use crate::{APP_NAME, CLUSTER_ID};
 use async_trait::async_trait;
-use aws_sdk_firehose::Client;
+use aws_sdk_firehose::config::http::HttpResponse;
+use aws_sdk_firehose::error::SdkError;
+use aws_sdk_firehose::operation::put_record_batch::{PutRecordBatchError, PutRecordBatchOutput};
 use aws_sdk_firehose::types::Record;
+use aws_sdk_firehose::Client;
 use chrono::{DateTime, Utc};
 use regex::Regex;
 use serde::Serialize;
@@ -16,7 +19,7 @@ const NON_CHARS: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"[^a-z0-9]+").un
 const ENV_FIREHOSE_STREAM_NAME: &str = "FIREHOSE_STREAM_NAME";
 const ENV_FIREHOSE_SYSTEM_NAME: &str = "FIREHOSE_SYSTEM_NAME";
 const EVENT_BUFFER_SIZE: usize = 8192;
-const EVENT_FLUSH_INVERVAL_SECONDS: u64 = 15;
+const EVENT_FLUSH_INTERVAL_SECONDS: u64 = 15;
 const AUTOMATIC_FLUSH_SIZE: usize = 64;
 const MAX_EVENTS_PER_UPLOAD: usize = 256;
 
@@ -78,7 +81,7 @@ impl FirehoseEventRecorder {
 
 async fn run_background_loop(client: &Client, stream: &str, mut rx: mpsc::Receiver<String>) {
     let mut buffer = Vec::new();
-    let mut interval = tokio::time::interval(Duration::from_secs(EVENT_FLUSH_INVERVAL_SECONDS));
+    let mut interval = tokio::time::interval(Duration::from_secs(EVENT_FLUSH_INTERVAL_SECONDS));
 
     while system::is_running() {
         tokio::select! {
@@ -107,16 +110,24 @@ async fn flush_batch(client: &Client, stream: &str, buffer: &mut Vec<String>) {
         .collect::<Vec<_>>();
 
     for chunk in records.chunks(MAX_EVENTS_PER_UPLOAD) {
-        if let Err(err) = client
-            .put_record_batch()
-            .delivery_stream_name(stream)
-            .set_records(Some(chunk.into()))
-            .send()
-            .await
-        {
+        if let Err(err) = flush_chunk(client, stream, chunk).await {
             tracing::error!(?err, "Failed to send batch of events to Firehose");
         }
     }
+}
+
+#[tracing::instrument(level = "debug", skip(client, chunk))]
+async fn flush_chunk(
+    client: &Client,
+    stream: &str,
+    chunk: &[Record],
+) -> Result<PutRecordBatchOutput, SdkError<PutRecordBatchError, HttpResponse>> {
+    client
+        .put_record_batch()
+        .delivery_stream_name(stream)
+        .set_records(Some(chunk.into()))
+        .send()
+        .await
 }
 
 #[async_trait]
@@ -135,7 +146,7 @@ impl EventRecorder for FirehoseEventRecorder {
         };
 
         if let Err(err) = self.record_event(wrapper).await {
-            tracing::error!(?event, %timestamp, ?err, "Failed to record event");
+            tracing::error ! ( ? event, % timestamp, ? err, "Failed to record event");
         }
     }
 }

@@ -1,6 +1,6 @@
+use serde::Deserialize;
 use serde::de::{Error, MapAccess, Visitor};
 use serde::ser::SerializeMap;
-use serde::Deserialize;
 use serde::{Deserializer, Serialize, Serializer};
 use std::collections::HashMap;
 use std::fmt;

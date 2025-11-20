@@ -4,7 +4,6 @@ use crate::scripts::value::boolean::TYPE_BOOLEAN;
 use crate::scripts::value::list::List;
 use crate::scripts::value::string::TYPE_STRING;
 use crate::scripts::value::{TypeName, Value};
-use crate::web::auth::user::User;
 
 pub const TYPE_NULL: TypeName = "Null";
 pub const TYPE_ANY: TypeName = "Any";
