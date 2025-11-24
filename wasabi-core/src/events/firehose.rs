@@ -27,10 +27,19 @@ const MAX_EVENTS_PER_UPLOAD: usize = 256;
 struct EventWrapper<'a, T: Event + Serialize> {
     #[serde(flatten)]
     pub payload: &'a T,
-
+    
+    #[serde(serialize_with = "ts_no_tz")]
     pub timestamp: DateTime<Utc>,
     pub event: &'static str,
     pub system: &'a str,
+}
+
+fn ts_no_tz<S>(dt: &DateTime<Utc>, s: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    let formatted = dt.format("%Y-%m-%d %H:%M:%S").to_string();
+    s.serialize_str(&formatted)
 }
 
 pub struct FirehoseEventRecorder {
