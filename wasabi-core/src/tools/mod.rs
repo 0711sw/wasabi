@@ -5,6 +5,7 @@ use std::pin::Pin;
 pub mod i18n_string;
 pub mod id_generator;
 pub mod system;
+pub mod watch;
 
 pub type PinnedBytesStream =
     Pin<Box<dyn Stream<Item = Result<Bytes, std::io::Error>> + Unpin + Send>>;
