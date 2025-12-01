@@ -27,7 +27,7 @@ const MAX_EVENTS_PER_UPLOAD: usize = 256;
 struct EventWrapper<'a, T: Event + Serialize> {
     #[serde(flatten)]
     pub payload: &'a T,
-    
+
     #[serde(serialize_with = "ts_no_tz")]
     pub timestamp: DateTime<Utc>,
     pub event: &'static str,
