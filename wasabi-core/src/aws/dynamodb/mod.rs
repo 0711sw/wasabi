@@ -1,4 +1,7 @@
 use anyhow::Context;
+use aws_sdk_dynamodb::config::http::HttpResponse;
+use aws_sdk_dynamodb::error::SdkError;
+use aws_sdk_dynamodb::operation::put_item::PutItemError;
 use aws_sdk_dynamodb::operation::query::QueryOutput;
 use aws_sdk_dynamodb::operation::query::builders::QueryFluentBuilder;
 use aws_sdk_dynamodb::types::AttributeValue;
@@ -14,13 +17,27 @@ pub mod schema;
 pub fn extract_entity<T: Serialize + DeserializeOwned>(
     output: QueryOutput,
 ) -> anyhow::Result<Option<T>> {
-    if let Some(result) = output.items.and_then(|items| items.into_iter().next()) {
-        serde_dynamo::aws_sdk_dynamodb_1::from_item(result)
-            .context("Failed to deserialize DynamoDB item")
-            .map(Some)
+    let first = output.items.and_then(|items| items.into_iter().next());
+    deserialize_entity(first)
+}
+
+pub fn deserialize_entity<T: Serialize + DeserializeOwned>(
+    values: Option<HashMap<String, AttributeValue>>,
+) -> anyhow::Result<Option<T>> {
+    if let Some(items) = values {
+        Ok(Some(
+            serde_dynamo::aws_sdk_dynamodb_1::from_item(items)
+                .context("Failed to deserialize DynamoDB item")?,
+        ))
     } else {
         Ok(None)
     }
+}
+
+pub fn is_conditional_check_failed(err: &SdkError<PutItemError, HttpResponse>) -> bool {
+    err.as_service_error()
+        .map(PutItemError::is_conditional_check_failed_exception)
+        .unwrap_or_default()
 }
 
 pub async fn find_first<E: Serialize + DeserializeOwned>(
