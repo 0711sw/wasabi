@@ -52,7 +52,7 @@ impl Debug for ScriptFunction {
 }
 
 impl Script {
-    pub fn find_function(&self, name: &str) -> Option<CallableFunction> {
+    pub fn find_function(&self, name: &str) -> Option<CallableFunction<'_>> {
         if let Some(function) = self.functions.get(name) {
             Some(CallableFunction {
                 script: self,

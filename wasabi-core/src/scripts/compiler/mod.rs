@@ -79,7 +79,10 @@ mod tests {
             "sub".to_string(),
             serde_json::Value::String("AAA".to_string()),
         );
-        let u = User { claims };
+        let u = User {
+            claims,
+            jwt_token: String::default(),
+        };
 
         match result {
             CompilationResult::Ok(script, msg) => {

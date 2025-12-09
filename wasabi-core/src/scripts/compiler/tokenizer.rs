@@ -152,7 +152,7 @@ impl Tokenizer {
 
     pub fn current_span(&self) -> ByteSpan {
         if self.is_at_end() {
-            (self.input.len()..self.input.len())
+            self.input.len()..self.input.len()
         } else {
             self.tokens[self.position].0.clone()
         }
