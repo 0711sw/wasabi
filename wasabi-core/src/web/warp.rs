@@ -1,12 +1,13 @@
 use crate::client_bail;
 use crate::web::error::{ApiError, ResultExt};
-use anyhow::{Context, anyhow};
+use anyhow::{anyhow, Context};
 use bytes::Bytes;
 use futures_util::{Stream, StreamExt, TryStreamExt};
 use http::Request;
 use hyper::{Body, Server};
-use serde::Serialize;
+use percent_encoding::percent_decode_str;
 use serde::de::DeserializeOwned;
+use serde::Serialize;
 use std::convert::Infallible;
 use std::env;
 use std::error::Error;
@@ -17,13 +18,13 @@ use std::task::Poll;
 use std::time::Duration;
 use tokio_util::bytes::Buf;
 use tokio_util::bytes::BufMut;
-use tracing::{Instrument, Span, debug_span};
+use tracing::{debug_span, Instrument, Span};
 use warp::http::header::CONTENT_TYPE;
 use warp::http::{HeaderValue, StatusCode};
 use warp::reply::Response;
-use warp::{Filter, Rejection, Reply, http, reply};
+use warp::{http, reply, Filter, Rejection, Reply};
 
-use crate::tools::{PinnedBytesStream, system};
+use crate::tools::{system, PinnedBytesStream};
 use tower::{Service, ServiceBuilder};
 
 pub fn content_length_header() -> impl Filter<Extract = (u64,), Error = Rejection> + Clone {
@@ -361,6 +362,25 @@ where
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct DecodedSegment(pub String);
+
+impl FromStr for DecodedSegment {
+    type Err = Infallible;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        // "%20" -> " "
+        let decoded = percent_decode_str(s).decode_utf8_lossy().into_owned();
+        Ok(DecodedSegment(decoded))
+    }
+}
+
+impl Into<String> for DecodedSegment {
+    fn into(self) -> String {
+        self.0
+    }
+}
+
 #[cfg(feature = "open_telemetry")]
 mod open_telemetry {
     use hyper::http::HeaderMap;
@@ -395,8 +415,8 @@ mod open_telemetry {
 mod tests {
     use crate::web::warp::as_size_limited_stream;
     use bytes::Bytes;
-    use futures_util::StreamExt;
     use futures_util::stream;
+    use futures_util::StreamExt;
 
     #[tokio::test]
     async fn as_size_limited_stream_allows_valid_size() {
