@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-tokio = { version = "1.44", features = ["full"] }
+tokio = { version = "1.48", features = ["full"] }
 futures-util = "0.3"
 tokio-util = "0.7"
 warp = "0.3.7"
@@ -14,22 +14,21 @@ serde_json = { version = "1.0", features = ["arbitrary_precision"] }
 serde_urlencoded = "0.7.1"
 chrono = { version = "0.4", features = ["serde"] }
 aws-config = { version = "1.8", features = ["behavior-version-latest"], optional = true }
-aws-sdk-s3 = { version = "1.82", optional = true }
-aws-sdk-dynamodb = { version = "1.71", optional = true }
+aws-sdk-s3 = { version = "1.117", optional = true }
+aws-sdk-dynamodb = { version = "1.98", optional = true }
 serde_dynamo = { version = "4.2", optional = true, features = ["aws-sdk-dynamodb+1"] }
-aws-sdk-firehose = { version = "1.82", optional = true }
-aws-sdk-bedrockruntime = { version = "1.82", optional = true }
+aws-sdk-firehose = { version = "1.99", optional = true }
+aws-sdk-bedrockruntime = { version = "1.120", optional = true }
 nanoid = { version = "0.4" }
 anyhow = "1.0"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "std"] }
-opentelemetry-semantic-conventions = { version = "0.30", features = ["semconv_experimental"] }
-tracing-opentelemetry = { version = "0.31", optional = true }
-opentelemetry = { version = "0.30", optional = true }
-opentelemetry-otlp = { version = "0.30", features = ["tonic", "grpc-tonic"], optional = true }
-opentelemetry_sdk = { version = "0.30", features = ["rt-tokio"], optional = true }
-jsonwebtoken = "9.3"
-jwks = "0.4"
+opentelemetry-semantic-conventions = { version = "0.31", features = ["semconv_experimental"] }
+tracing-opentelemetry = { version = "0.32", optional = true }
+opentelemetry = { version = "0.31", optional = true }
+opentelemetry-otlp = { version = "0.31", features = ["tonic", "grpc-tonic"], optional = true }
+opentelemetry_sdk = { version = "0.31", features = ["rt-tokio"], optional = true }
+jsonwebtoken = "10.2"
 reqwest = { version = "0.12", features = ["rustls-tls"] }
 arc-swap = "1.7"
 nu-ansi-term = { version = "0.50", optional = true }
@@ -38,13 +37,9 @@ tower = "0.5.2"
 hyper = "0.14"
 percent-encoding = "2.3.2"
 async-trait = { version = "0.1" }
-bytesize = "2.0"
+bytesize = "2.3"
 opensearch = { version = "2.3", optional = true }
 regex = "1.11"
-logos = { version = "0.15", optional = true }
-rust_decimal = { version = "1.37", features = ["serde-with-str"], optional = true }
-unescape = { version = "0.1", optional = true }
-bitflags = { version = "2.9", optional = true }
 base64 = "0.22.1"
 
 [dev-dependencies]
@@ -58,6 +53,4 @@ aws_s3 = ["aws-config", "aws-sdk-s3"]
 aws_dynamodb = ["aws-config", "aws-sdk-dynamodb", "serde_dynamo"]
 aws_firehose = ["aws-config", "aws-sdk-firehose"]
 aws_bedrock = ["aws-config", "aws-sdk-bedrockruntime"]
-config = []
 open_search = ["opensearch"]
-scripting = ["logos", "rust_decimal", "unescape", "bitflags"]

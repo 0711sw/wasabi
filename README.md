@@ -8,8 +8,34 @@ compile time. The features are:
 
 ### pretty_logs
 
+Renders colorful console outputs for opentelemetry spans.
 
-= ["nu-ansi-term"]
-open_telemetry = ["opentelemetry", "opentelemetry-otlp", "opentelemetry_sdk", "tracing-opentelemetry"]
-aws_s3 = ["aws-config", "aws-sdk-s3"]
-aws_dynamodb = ["aws-config", "aws-sdk-dynamodb"]
+### open_telemetry
+
+Provides some tooling to set-up opentelemetry for tracing.
+
+### aws_s3
+
+Provide some helpers to interact with AWS S3.
+
+### aws_dynamodb
+
+Provides some tooling to interact with AWS DynamoDB.
+
+### aws_firehose
+
+Provides an EventRecorder which sends events to AWS Firehose.
+
+### aws_bedrock
+
+Provides some tooling to interact with AWS Bedrock.
+
+### open_search
+
+Provides some tooling to talk to AWS OpenSearch clusters.
+
+---
+
+## License
+
+This project is licensed under the **MIT License**.
