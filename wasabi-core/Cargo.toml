@@ -28,7 +28,8 @@ tracing-opentelemetry = { version = "0.32", optional = true }
 opentelemetry = { version = "0.31", optional = true }
 opentelemetry-otlp = { version = "0.31", features = ["tonic", "grpc-tonic"], optional = true }
 opentelemetry_sdk = { version = "0.31", features = ["rt-tokio"], optional = true }
-jsonwebtoken = "10.2"
+jsonwebtoken = "9.3.1"
+jwks = "0.4"
 reqwest = { version = "0.12", features = ["rustls-tls"] }
 arc-swap = "1.7"
 nu-ansi-term = { version = "0.50", optional = true }
@@ -46,7 +47,7 @@ base64 = "0.22.1"
 mock_instant = "0.6"
 
 [features]
-default = ["aws_bedrock"]
+default = []
 pretty_logs = ["nu-ansi-term"]
 open_telemetry = ["opentelemetry", "opentelemetry-otlp", "opentelemetry_sdk", "tracing-opentelemetry"]
 aws_s3 = ["aws-config", "aws-sdk-s3"]
