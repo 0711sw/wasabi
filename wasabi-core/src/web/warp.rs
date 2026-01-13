@@ -375,9 +375,9 @@ impl FromStr for DecodedSegment {
     }
 }
 
-impl Into<String> for DecodedSegment {
-    fn into(self) -> String {
-        self.0
+impl From<DecodedSegment> for String {
+    fn from(value: DecodedSegment) -> Self {
+        value.0
     }
 }
 

@@ -80,7 +80,7 @@ impl CachedObject for StaticCachedObject {
         Ok(Arc::new(self.content.clone()))
     }
 
-    async fn fetch_with_flush(&self, flush: bool) -> anyhow::Result<Arc<Vec<u8>>> {
+    async fn fetch_with_flush(&self, _flush: bool) -> anyhow::Result<Arc<Vec<u8>>> {
         self.fetch().await
     }
 }
