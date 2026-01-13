@@ -1,3 +1,9 @@
+//! JWT-based authentication filters.
+//!
+//! Provides warp filters that extract and validate JWT tokens from requests,
+//! returning a [`User`] with parsed claims. Supports both shared secret (HMAC)
+//! and JWKS-based validation, with per-issuer configuration.
+
 use crate::status_bail;
 use crate::web::auth::authenticator::Authenticator;
 use crate::web::auth::user::User;
@@ -16,6 +22,7 @@ const PREFIX_BEARER_TOKEN: &str = "Bearer ";
 
 pub(crate) const DEFAULT_LOCALE: &str = "en-US";
 
+// Standard JWT claim names
 pub const CLAIM_AUD: &str = "aud";
 pub const CLAIM_ISS: &str = "iss";
 pub const CLAIM_SUB: &str = "sub";
@@ -31,6 +38,9 @@ struct TokenInQueryString {
     jwt: Option<String>,
 }
 
+/// Filter that extracts and validates a JWT, returning the authenticated [`User`].
+///
+/// Accepts tokens from the `Authorization: Bearer <token>` header or `?jwt=<token>` query param.
 pub fn with_user(
     authenticator: Arc<Authenticator>,
 ) -> impl Filter<Extract = (User,), Error = Rejection> + Clone {
@@ -49,6 +59,7 @@ pub fn with_user(
         )
 }
 
+/// Filter that validates a JWT and requires at least one of the specified permissions.
 pub fn with_user_with_any_permission(
     authenticator: Arc<Authenticator>,
     permissions: &[&str],
@@ -59,6 +70,7 @@ pub fn with_user_with_any_permission(
     })
 }
 
+/// Filter that validates permissions without extracting the User (for guards).
 pub fn enforce_user_with_any_permission(
     authenticator: Arc<Authenticator>,
     permissions: &'static [&'static str],

@@ -1,3 +1,9 @@
+//! Warp framework utilities and HTTP server setup.
+//!
+//! Provides filters for parsing request bodies (JSON, form, raw bytes/streams),
+//! response helpers, error handling, and the main [`run_webserver`] function
+//! that sets up tracing and graceful shutdown.
+
 use crate::client_bail;
 use crate::web::error::{ApiError, ResultExt};
 use anyhow::{Context, anyhow};
@@ -27,16 +33,19 @@ use warp::{Filter, Rejection, Reply, http, reply};
 use crate::tools::{PinnedBytesStream, system};
 use tower::{Service, ServiceBuilder};
 
+/// Filter that extracts the Content-Length header as u64.
 pub fn content_length_header() -> impl Filter<Extract = (u64,), Error = Rejection> + Clone {
     warp::header::header::<u64>(http::header::CONTENT_LENGTH.as_str())
 }
 
+/// Filter that injects a cloneable value into the filter chain.
 pub fn with_cloneable<C: Clone + Send>(
     value: C,
 ) -> impl Filter<Extract = (C,), Error = Infallible> + Clone {
     warp::any().map(move || value.clone())
 }
 
+/// Filter that reads the request body into a `Vec<u8>`, enforcing size limits.
 pub fn with_body_as_buffer(
     max_body_size: u64,
 ) -> impl Filter<Extract = (Vec<u8>,), Error = Rejection> + Clone {
@@ -92,6 +101,7 @@ fn buf_to_bytes(mut buf: impl Buf) -> Bytes {
     Bytes::from(vec)
 }
 
+/// Filter that provides the request body as a streaming `PinnedBytesStream`.
 pub fn with_body_as_stream(
     max_content_size: u64,
 ) -> impl Filter<Extract = (PinnedBytesStream,), Error = Rejection> + Clone {
@@ -124,6 +134,7 @@ async fn as_stream(
     Ok(Box::pin(stream.map_ok(buf_to_bytes)) as PinnedBytesStream)
 }
 
+/// Reads a byte stream into a pre-allocated buffer.
 pub async fn read_into_buffer(
     mut stream: impl Stream<Item = Result<impl Buf, std::io::Error>> + Unpin,
     content_length: u64,
@@ -141,6 +152,7 @@ pub async fn read_into_buffer(
     Ok(data)
 }
 
+/// Filter that parses the request body as JSON into type `T`.
 pub fn with_body_as_json<T: DeserializeOwned + Send>(
     max_body_size: u64,
 ) -> impl Filter<Extract = (T,), Error = Rejection> + Clone {
@@ -167,6 +179,7 @@ async fn decode_json<T: DeserializeOwned + Send>(
     Ok(decoded)
 }
 
+/// Filter that parses URL-encoded form data into type `T`.
 pub fn with_body_as_form<T: DeserializeOwned + Send>(
     max_body_size: u64,
 ) -> impl Filter<Extract = (T,), Error = Rejection> + Clone {
@@ -194,6 +207,7 @@ async fn decode_form<T: DeserializeOwned + Send>(
     Ok(decoded)
 }
 
+/// Filter that reads the request body as a UTF-8 string.
 pub fn with_body_as_string(
     max_body_size: u64,
 ) -> impl Filter<Extract = (String,), Error = Rejection> + Clone {
@@ -219,10 +233,12 @@ async fn body_as_string(
 
     Ok(data_as_string)
 }
+/// Converts a result into a JSON response with status 200 OK.
 pub fn into_response<S: Serialize>(result: anyhow::Result<S>) -> Result<impl Reply, Rejection> {
     into_response_with_status(result.map(|data| (StatusCode::OK, data)))
 }
 
+/// Converts a result into a JSON response with a custom status code.
 pub fn into_response_with_status<S: Serialize>(
     response: anyhow::Result<(StatusCode, S)>,
 ) -> Result<impl Reply, Rejection> {
@@ -245,6 +261,7 @@ pub fn into_response_with_status<S: Serialize>(
     }
 }
 
+/// Converts an anyhow error into a warp Rejection, preserving ApiError status if present.
 pub fn into_rejection(err: anyhow::Error) -> Rejection {
     match err.downcast_ref::<ApiError>() {
         Some(api_error) => api_error.clone().into(),
@@ -260,6 +277,7 @@ async fn handle_rejection(err: Rejection) -> Result<impl Reply, Rejection> {
     }
 }
 
+/// Combines multiple routes using `or`. Usage: `routes![route1, route2, route3]`
 #[macro_export]
 macro_rules! routes {
     [$route:expr] => {
@@ -270,6 +288,10 @@ macro_rules! routes {
     };
 }
 
+/// Starts an HTTP server with tracing and graceful shutdown.
+///
+/// Reads `BIND_ADDRESS` from environment. Waits for shutdown signal,
+/// then allows 3 seconds for in-flight requests to complete.
 pub async fn run_webserver<F>(routes: F) -> anyhow::Result<()>
 where
     F: Filter + Clone + Send + Sync + 'static,
@@ -362,6 +384,9 @@ where
     }
 }
 
+/// A URL path segment that has been percent-decoded.
+///
+/// Use in route patterns to automatically decode path segments like `%20` → ` `.
 #[derive(Debug, Clone)]
 pub struct DecodedSegment(pub String);
 
@@ -413,10 +438,14 @@ mod open_telemetry {
 
 #[cfg(test)]
 mod tests {
-    use crate::web::warp::as_size_limited_stream;
+    use super::*;
+    use crate::web::error::ApiError;
     use bytes::Bytes;
-    use futures_util::StreamExt;
     use futures_util::stream;
+    use futures_util::StreamExt;
+    use std::str::FromStr;
+
+    // as_size_limited_stream tests
 
     #[tokio::test]
     async fn as_size_limited_stream_allows_valid_size() {
@@ -455,5 +484,82 @@ mod tests {
         let result: Vec<_> = as_size_limited_stream(stream, 5).await.collect().await;
 
         assert!(result.iter().any(|res| res.is_err()));
+    }
+
+    // into_rejection tests
+
+    #[test]
+    fn into_rejection_preserves_api_error_status() {
+        use crate::web::error::ResultExt;
+
+        // Create an error with ApiError context
+        let err: anyhow::Error = anyhow::anyhow!("root cause")
+            .context(ApiError::new(StatusCode::NOT_FOUND, "Not found"));
+
+        let rejection = into_rejection(err);
+
+        let found = rejection.find::<ApiError>().unwrap();
+        assert_eq!(found.status, StatusCode::NOT_FOUND);
+        assert_eq!(found.message, "Not found");
+    }
+
+    #[test]
+    fn into_rejection_defaults_to_500_for_plain_errors() {
+        let err = anyhow::anyhow!("Something went wrong");
+
+        let rejection = into_rejection(err);
+
+        let found = rejection.find::<ApiError>().unwrap();
+        assert_eq!(found.status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert!(found.message.contains("Something went wrong"));
+    }
+
+    // DecodedSegment tests
+
+    #[test]
+    fn decoded_segment_decodes_percent_encoding() {
+        let segment = DecodedSegment::from_str("hello%20world").unwrap();
+        assert_eq!(segment.0, "hello world");
+    }
+
+    #[test]
+    fn decoded_segment_decodes_special_chars() {
+        let segment = DecodedSegment::from_str("foo%2Fbar").unwrap();
+        assert_eq!(segment.0, "foo/bar");
+
+        let segment = DecodedSegment::from_str("a%3Db").unwrap();
+        assert_eq!(segment.0, "a=b");
+    }
+
+    #[test]
+    fn decoded_segment_passes_through_plain_text() {
+        let segment = DecodedSegment::from_str("hello").unwrap();
+        assert_eq!(segment.0, "hello");
+    }
+
+    #[test]
+    fn decoded_segment_converts_to_string() {
+        let segment = DecodedSegment::from_str("test").unwrap();
+        let s: String = segment.into();
+        assert_eq!(s, "test");
+    }
+
+    // read_into_buffer tests
+
+    #[tokio::test]
+    async fn read_into_buffer_collects_chunks() {
+        let stream = stream::iter(vec![
+            Ok::<Bytes, std::io::Error>(Bytes::from("hel")),
+            Ok(Bytes::from("lo")),
+        ]);
+        let result = read_into_buffer(stream, 5).await.unwrap();
+        assert_eq!(result, b"hello");
+    }
+
+    #[tokio::test]
+    async fn read_into_buffer_handles_empty_stream() {
+        let stream = stream::iter(Vec::<Result<Bytes, std::io::Error>>::new());
+        let result = read_into_buffer(stream, 0).await.unwrap();
+        assert!(result.is_empty());
     }
 }

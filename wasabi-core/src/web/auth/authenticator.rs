@@ -1,3 +1,9 @@
+//! JWT validation with support for multiple issuers and key strategies.
+//!
+//! The [`Authenticator`] validates JWT tokens using either a shared secret (HMAC)
+//! or JWKS endpoints, with per-issuer configuration. Custom claim prefixes can be
+//! stripped to normalize claims from different identity providers.
+
 use crate::status_bail;
 use crate::web::auth::jwks::{JwksCache, UrlJwksFetcher};
 use crate::web::auth::user::ClaimsSet;
@@ -15,17 +21,23 @@ use std::str::FromStr;
 use std::sync::Arc;
 use warp::http::StatusCode;
 
+/// Trait for dynamically fetching authenticator config based on JWT claims.
+///
+/// Implement this to support multi-tenant scenarios where different tenants
+/// use different identity providers.
 #[async_trait]
 pub trait ConfigFetcher: Send + Sync {
     async fn fetch(&self, claims: &ClaimsSet) -> Option<Arc<AuthenticatorConfig>>;
 }
 
+/// Validates JWTs and extracts claims.
 pub struct Authenticator {
     config: AuthenticatorConfig,
     fetchers: Vec<Box<dyn ConfigFetcher>>,
 }
 
 impl Authenticator {
+    /// Creates an authenticator with the given configuration.
     pub fn new(config: AuthenticatorConfig) -> Self {
         Authenticator {
             config,
@@ -41,6 +53,15 @@ impl Authenticator {
         )
     }
 
+    /// Creates an authenticator from environment variables.
+    ///
+    /// # Environment Variables
+    /// - `AUTH_SECRET` - Shared secret for HMAC validation
+    /// - `AUTH_ALGORITHMS` - Comma-separated list of allowed algorithms
+    /// - `AUTH_ISSUER` - Comma-separated issuers, optionally with config (e.g., `iss1,iss2=jwks:/url`)
+    /// - `AUTH_AUDIENCE` - Expected audience claim
+    /// - `DEFAULT_LOCALE` - Fallback locale if not in token
+    /// - `AUTH_CUSTOM_CLAIM_PREFIX` - Prefix to strip from custom claims
     pub fn from_env() -> anyhow::Result<Self> {
         let config = AuthenticatorConfig::new(
             env::var("AUTH_SECRET").ok(),
@@ -56,10 +77,12 @@ impl Authenticator {
         Ok(Self::new(config))
     }
 
+    /// Adds a dynamic config fetcher for multi-tenant scenarios.
     pub fn add_fetcher(&mut self, fetcher: Box<dyn ConfigFetcher>) {
         self.fetchers.push(fetcher);
     }
 
+    /// Validates the JWT and returns the extracted claims.
     pub async fn parse_jwt(&self, jwt_token: &str) -> anyhow::Result<ClaimsSet> {
         let claims = Self::decode_payload(jwt_token)
             .context("Invalid JWT present")
@@ -136,6 +159,7 @@ impl Authenticator {
     }
 }
 
+/// Configuration for JWT validation.
 pub struct AuthenticatorConfig {
     validation: Validation,
     default_locale: String,
@@ -143,11 +167,14 @@ pub struct AuthenticatorConfig {
     key_fetcher: KeyFetchStrategy,
 }
 
+/// Strategy for fetching decoding keys - either a single key for all issuers
+/// or a different key source per issuer.
 enum KeyFetchStrategy {
     Static(Arc<dyn KeyFetcher>),
     PerIssuer(HashMap<String, Arc<dyn KeyFetcher>>),
 }
 
+/// Trait for fetching JWT decoding keys.
 #[async_trait]
 pub trait KeyFetcher: Send + Sync {
     async fn fetch(&self, header: &Header) -> anyhow::Result<Arc<DecodingKey>>;
@@ -194,6 +221,9 @@ impl KeyFetcher for JwksFetcher {
 }
 
 impl AuthenticatorConfig {
+    /// Creates a new authenticator configuration.
+    ///
+    /// Issuers can include per-issuer config: `issuer=jwks:/path` or `issuer=secret`.
     pub fn new(
         shared_secret: Option<impl AsRef<str>>,
         algorithms: &str,

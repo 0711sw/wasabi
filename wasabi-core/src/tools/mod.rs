@@ -20,15 +20,6 @@ pub type PinnedBytesStream =
 ///
 /// Useful for filtering with iterator methods when you need the inverse
 /// of an existing predicate without writing a closure.
-///
-/// # Example
-/// ```
-/// use wasabi::tools::not;
-///
-/// let is_empty = |s: &String| s.is_empty();
-/// let items = vec!["".to_string(), "hello".to_string()];
-/// let non_empty: Vec<_> = items.iter().filter(not(is_empty)).collect();
-/// ```
 pub fn not<F, T>(f: F) -> impl Fn(&T) -> bool
 where
     F: Fn(&T) -> bool,

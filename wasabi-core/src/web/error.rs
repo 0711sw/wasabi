@@ -1,8 +1,17 @@
+//! Error types and helpers for mapping errors to HTTP responses.
+//!
+//! The [`ApiError`] type carries both an HTTP status code and a message.
+//! Use [`ResultExt`] to attach status codes to `anyhow::Error` chains,
+//! or the [`client_bail!`] and [`status_bail!`] macros for early returns.
+
 use serde::Serialize;
 use std::fmt::{Debug, Display, Formatter};
 use warp::http::StatusCode;
 use warp::reject::Reject;
 
+/// An error that can be serialized to JSON and returned as an HTTP response.
+///
+/// The `status` field determines the HTTP status code but is not serialized.
 #[derive(Clone, Serialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct ApiError {
@@ -20,6 +29,7 @@ impl Display for ApiError {
 impl Reject for ApiError {}
 
 impl ApiError {
+    /// Creates a new API error with the given HTTP status and message.
     pub fn new(status: StatusCode, message: impl ToString) -> Self {
         ApiError {
             status,
@@ -28,9 +38,12 @@ impl ApiError {
     }
 }
 
+/// Extension trait for attaching HTTP status codes to error results.
 pub trait ResultExt<T> {
+    /// Wraps the error with an [`ApiError`] carrying the given status code.
     fn with_status(self, status: StatusCode) -> Result<T, anyhow::Error>;
 
+    /// Convenience method for `with_status(StatusCode::BAD_REQUEST)`.
     fn mark_client_error(self) -> Result<T, anyhow::Error>;
 }
 
@@ -50,6 +63,7 @@ impl<T> ResultExt<T> for Result<T, anyhow::Error> {
     }
 }
 
+/// Early return with a 400 Bad Request error.
 #[macro_export]
 macro_rules! client_bail {
     ($err:expr $(,)?) => {
@@ -60,6 +74,7 @@ macro_rules! client_bail {
     };
 }
 
+/// Early return with a custom HTTP status code.
 #[macro_export]
 macro_rules! status_bail {
     ($status:expr, $msg:literal $(,)?) => {

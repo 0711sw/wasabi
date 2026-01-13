@@ -1,3 +1,8 @@
+//! Authenticated user representation with claim accessors.
+//!
+//! The [`User`] struct wraps validated JWT claims and provides typed access
+//! to standard fields like tenant, user ID, name, email, and permissions.
+
 use crate::status_bail;
 use crate::web::auth::{
     CLAIM_ACT, CLAIM_EMAIL, CLAIM_LOCALE, CLAIM_NAME, CLAIM_PERMISSIONS, CLAIM_SUB, CLAIM_TENANT,
@@ -13,13 +18,16 @@ use warp::http::StatusCode;
 
 pub(crate) type ClaimsSet = BTreeMap<String, Value>;
 
+/// An authenticated user extracted from a validated JWT.
 #[derive(Clone)]
 pub struct User {
+    /// The original JWT token string.
     pub jwt_token: String,
     pub(crate) claims: ClaimsSet,
 }
 
 impl User {
+    /// Returns the tenant ID from the `tenant` claim.
     pub fn tenant_id(&self) -> anyhow::Result<&str> {
         self.claims
             .get(CLAIM_TENANT)
@@ -29,6 +37,7 @@ impl User {
             .mark_client_error()
     }
 
+    /// Returns the user ID from the `sub` claim.
     pub fn user_id(&self) -> anyhow::Result<&str> {
         self.claims
             .get(CLAIM_SUB)
@@ -38,6 +47,7 @@ impl User {
             .mark_client_error()
     }
 
+    /// Returns the user's full name from the `name` claim.
     pub fn full_name(&self) -> anyhow::Result<&str> {
         self.claims
             .get(CLAIM_NAME)
@@ -47,6 +57,7 @@ impl User {
             .mark_client_error()
     }
 
+    /// Returns the user's email from the `email` claim.
     pub fn email(&self) -> anyhow::Result<&str> {
         self.claims
             .get(CLAIM_EMAIL)
@@ -56,6 +67,7 @@ impl User {
             .mark_client_error()
     }
 
+    /// Returns `true` if the user has at least one of the given permissions.
     pub fn has_any_permission(&self, permissions: &[&str]) -> bool {
         if let Some(granted_permission) = self
             .claims
@@ -74,6 +86,7 @@ impl User {
         }
     }
 
+    /// Returns the user if they have at least one of the given permissions, otherwise 401.
     pub fn enforce_any_permission(self, permissions: &[&str]) -> anyhow::Result<Self> {
         if self.has_any_permission(permissions) {
             Ok(self)

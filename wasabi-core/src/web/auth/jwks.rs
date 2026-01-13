@@ -1,3 +1,8 @@
+//! JWKS (JSON Web Key Set) fetching and caching.
+//!
+//! Caches keys for 5 minutes, with a minimum 10-second cooldown between fetches
+//! to prevent hammering the JWKS endpoint on key rotation.
+
 use anyhow::{Context, bail};
 use arc_swap::ArcSwapOption;
 use async_trait::async_trait;
