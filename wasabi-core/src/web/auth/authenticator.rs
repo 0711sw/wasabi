@@ -3,11 +3,11 @@ use crate::web::auth::jwks::{JwksCache, UrlJwksFetcher};
 use crate::web::auth::user::ClaimsSet;
 use crate::web::auth::{CLAIM_ISS, CLAIM_LOCALE, DEFAULT_LOCALE};
 use crate::web::error::ResultExt;
-use anyhow::{Context, bail};
+use anyhow::{bail, Context};
 use async_trait::async_trait;
-use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use jsonwebtoken::{Algorithm, DecodingKey, Header, Validation, decode, decode_header};
+use base64::Engine;
+use jsonwebtoken::{decode, decode_header, Algorithm, DecodingKey, Header, Validation};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::env;
@@ -35,28 +35,15 @@ impl Authenticator {
 
     #[cfg(test)]
     pub fn with_simple_secret(secret: &str) -> Self {
-        Self::new(AuthenticatorConfig::new(
-            None::<&str>,
-            Some(secret),
-            "",
-            "",
-            "",
-            DEFAULT_LOCALE.to_string(),
-            None,
-        ))
+        Self::new(
+            AuthenticatorConfig::new(Some(secret), "", "", "", DEFAULT_LOCALE.to_string(), None)
+                .unwrap(),
+        )
     }
 
     pub fn from_env() -> anyhow::Result<Self> {
-        let jwks_url = env::var("AUTH_JWKS_URL").ok();
-        let shared_secret = env::var("AUTH_SECRET").ok();
-
-        if jwks_url.is_none() && shared_secret.is_none() {
-            bail!("Either provide AUTH_JWKS_URL or AUTH_SECRET in the system environment");
-        }
-
         let config = AuthenticatorConfig::new(
-            jwks_url,
-            shared_secret,
+            env::var("AUTH_SECRET").ok(),
             &env::var("AUTH_ALGORITHMS").ok().unwrap_or_default(),
             &env::var("AUTH_ISSUER").ok().unwrap_or_default(),
             &env::var("AUTH_AUDIENCE").ok().unwrap_or_default(),
@@ -64,7 +51,7 @@ impl Authenticator {
                 .ok()
                 .unwrap_or_else(|| DEFAULT_LOCALE.to_string()),
             env::var("AUTH_CUSTOM_CLAIM_PREFIX").ok(),
-        );
+        )?;
 
         Ok(Self::new(config))
     }
@@ -150,44 +137,95 @@ impl Authenticator {
 }
 
 pub struct AuthenticatorConfig {
-    hmac_based_key: Option<DecodingKey>,
     validation: Validation,
     default_locale: String,
     custom_claim_prefix: Option<String>,
-    jwks_cache: JwksCacheStrategy,
+    key_fetcher: KeyFetchStrategy,
 }
 
-enum JwksCacheStrategy {
-    None,
-    Static(Arc<JwksCache>),
-    PerIssuer(HashMap<String, Arc<JwksCache>>),
+enum KeyFetchStrategy {
+    Static(Arc<dyn KeyFetcher>),
+    PerIssuer(HashMap<String, Arc<dyn KeyFetcher>>),
+}
+
+#[async_trait]
+pub trait KeyFetcher: Send + Sync {
+    async fn fetch(&self, header: &Header) -> anyhow::Result<Arc<DecodingKey>>;
+}
+
+struct HmacKeyFetcher {
+    hmac_key: Arc<DecodingKey>,
+}
+
+impl HmacKeyFetcher {
+    pub fn new(hmac_key: Arc<DecodingKey>) -> Self {
+        Self { hmac_key }
+    }
+}
+
+#[async_trait]
+impl KeyFetcher for HmacKeyFetcher {
+    async fn fetch(&self, _header: &Header) -> anyhow::Result<Arc<DecodingKey>> {
+        Ok(self.hmac_key.clone())
+    }
+}
+
+struct JwksFetcher {
+    jwks_cache: JwksCache,
+}
+
+impl JwksFetcher {
+    pub fn new(jwks_url: String) -> Self {
+        Self {
+            jwks_cache: JwksCache::new(Box::new(UrlJwksFetcher::new(jwks_url))),
+        }
+    }
+}
+
+#[async_trait]
+impl KeyFetcher for JwksFetcher {
+    async fn fetch(&self, header: &Header) -> anyhow::Result<Arc<DecodingKey>> {
+        if let Some(kid) = &header.kid {
+            self.jwks_cache.fetch_key(kid).await
+        } else {
+            Err(anyhow::anyhow!("No kid present in JWT header"))
+        }
+    }
 }
 
 impl AuthenticatorConfig {
     pub fn new(
-        jwks_url: Option<impl ToString>,
         shared_secret: Option<impl AsRef<str>>,
         algorithms: &str,
         issuer: &str,
         audience: &str,
         default_locale: String,
         custom_claim_prefix: Option<String>,
-    ) -> Self {
-        let validation = Self::build_validation(algorithms, issuer, audience);
-        let jwks_cache =
-            Self::build_jwks_cache_strategy(&validation, jwks_url.map(|url| url.to_string()));
+    ) -> anyhow::Result<Self> {
+        let hmac_based_key =
+            shared_secret.map(|str| Arc::new(DecodingKey::from_secret(str.as_ref().as_bytes())));
+        let issuers = issuer
+            .split(",")
+            .into_iter()
+            .map(|iss| iss.split_once('=').unwrap_or((iss, "")))
+            .map(|(iss, config)| (iss.to_owned(), config.to_owned()))
+            .collect();
+        let validation = Self::build_validation(algorithms, &issuers, audience);
+        let key_fetcher = Self::build_key_fetcher_strategy(issuers, hmac_based_key)?;
 
-        AuthenticatorConfig {
-            hmac_based_key: shared_secret
-                .map(|str| DecodingKey::from_secret(str.as_ref().as_bytes())),
-            jwks_cache,
+        Ok(AuthenticatorConfig {
+            validation,
             default_locale,
             custom_claim_prefix,
-            validation: Self::build_validation(algorithms, issuer, audience),
-        }
+            key_fetcher,
+        })
     }
 
-    fn build_validation(algorithms: &str, issuer: &str, audience: &str) -> Validation {
+    fn build_validation(
+        algorithms: &str,
+        issuers: &HashMap<String, String>,
+        audience: &str,
+    ) -> Validation {
         let mut validation = Validation::default();
 
         #[cfg(test)]
@@ -195,7 +233,7 @@ impl AuthenticatorConfig {
 
         validation.validate_nbf = true;
         validation.algorithms = Self::parse_algorithms(algorithms);
-        validation.iss = Self::parse_set(issuer);
+        validation.iss = Some(issuers.iter().map(|(iss, _)| iss.to_owned()).collect());
         validation.aud = Self::parse_set(audience);
 
         // If we chose to leave the required audiences empty, we skip validation entirely as
@@ -223,35 +261,65 @@ impl AuthenticatorConfig {
         .filter(|set| !set.is_empty())
     }
 
-    fn build_jwks_cache_strategy(
-        validation: &Validation,
-        jwks_url: Option<String>,
-    ) -> JwksCacheStrategy {
-        if let Some(jwks_url) = jwks_url {
-            if jwks_url.starts_with('/') {
-                if let Some(issuers) = &validation.iss {
-                    let caches_per_issuer = issuers
-                        .iter()
-                        .map(|iss| {
-                            let url = format!("{}{}", iss.trim_matches('/'), jwks_url);
-
-                            (iss.to_owned(), Self::build_cache_for_url(url))
-                        })
-                        .collect();
-                    JwksCacheStrategy::PerIssuer(caches_per_issuer)
-                } else {
-                    JwksCacheStrategy::None
-                }
+    fn build_key_fetcher_strategy(
+        issuers: HashMap<String, String>,
+        hmac_key: Option<Arc<DecodingKey>>,
+    ) -> anyhow::Result<KeyFetchStrategy> {
+        if issuers.is_empty()
+            || issuers
+                .iter()
+                .all(|(_, config)| *config == "" || *config == "secret")
+        {
+            if let Some(hmac_key) = hmac_key {
+                Ok(KeyFetchStrategy::Static(Arc::new(HmacKeyFetcher::new(
+                    hmac_key,
+                ))))
             } else {
-                JwksCacheStrategy::Static(Self::build_cache_for_url(jwks_url))
+                Err(anyhow::anyhow!(
+                    "All issuers rely on a shared secret to be present, but none was given"
+                ))
             }
         } else {
-            JwksCacheStrategy::None
+            let mut config_per_issuer = HashMap::new();
+
+            for (iss, config) in issuers {
+                let fetcher = Self::create_key_fetcher_from_config(&iss, config, &hmac_key)?;
+                config_per_issuer.insert(iss, fetcher);
+            }
+
+            Ok(KeyFetchStrategy::PerIssuer(config_per_issuer))
         }
     }
 
-    fn build_cache_for_url(url: String) -> Arc<JwksCache> {
-        Arc::new(JwksCache::new(Box::new(UrlJwksFetcher::new(url))))
+    fn create_key_fetcher_from_config(
+        iss: &str,
+        config: String,
+        hmac_key: &Option<Arc<DecodingKey>>,
+    ) -> anyhow::Result<Arc<dyn KeyFetcher>> {
+        if config.is_empty() || config == "secret" {
+            if let Some(hmac_key) = hmac_key {
+                Ok(Arc::new(HmacKeyFetcher::new(hmac_key.clone())))
+            } else {
+                Err(anyhow::anyhow!(
+                    "Issuer {} relies on a shared secret, but none was given",
+                    iss
+                ))
+            }
+        } else if let Some(jwks_url) = config.strip_prefix("jwks:") {
+            let jwks_url = if jwks_url.starts_with('/') {
+                format!("{}{}", iss.trim_matches('/'), jwks_url)
+            } else {
+                jwks_url.to_owned()
+            };
+
+            Ok(Arc::new(JwksFetcher::new(jwks_url)))
+        } else {
+            Err(anyhow::anyhow!(
+                "Issuer {} has an invalid config: {}",
+                iss,
+                config
+            ))
+        }
     }
 
     fn parse_algorithms(algorithms: &str) -> Vec<Algorithm> {
@@ -283,34 +351,29 @@ impl AuthenticatorConfig {
             );
         }
 
-        if let Some(jwks_cache) = &self.resolve_jwks_cache(claims).await
-            && let Some(kid) = &header.kid
-        {
-            let decoding_key = jwks_cache
-                .fetch_key(kid)
-                .await
-                .with_status(StatusCode::UNAUTHORIZED)?;
-            self.validate_signature(&header, &decoding_key, jwt_token)
-        } else if let Some(hmac) = &self.hmac_based_key {
-            self.validate_signature(&header, hmac, jwt_token)
-        } else {
-            status_bail!(
-                StatusCode::UNAUTHORIZED,
-                "Invalid JWT present: No matching authentication mechanism found"
-            )
-        }
-    }
+        let key_fetcher = match &self.key_fetcher {
+            KeyFetchStrategy::Static(fetcher) => fetcher.clone(),
+            KeyFetchStrategy::PerIssuer(fetcher_per_issuer) => {
+                if let Some(fetcher) = claims
+                    .get(CLAIM_ISS)
+                    .and_then(Value::as_str)
+                    .and_then(|iss| fetcher_per_issuer.get(iss))
+                {
+                    fetcher.clone()
+                } else {
+                    status_bail!(
+                        StatusCode::UNAUTHORIZED,
+                        "Invalid issuer or missing configuration"
+                    )
+                }
+            }
+        };
 
-    async fn resolve_jwks_cache(&self, claims: &ClaimsSet) -> Option<Arc<JwksCache>> {
-        match &self.jwks_cache {
-            JwksCacheStrategy::None => None,
-            JwksCacheStrategy::Static(cache) => Some(cache.clone()),
-            JwksCacheStrategy::PerIssuer(cache_per_issuer) => claims
-                .get(CLAIM_ISS)
-                .and_then(Value::as_str)
-                .and_then(|iss| cache_per_issuer.get(iss))
-                .cloned(),
-        }
+        let decoding_key = key_fetcher
+            .fetch(&header)
+            .await
+            .with_status(StatusCode::UNAUTHORIZED)?;
+        self.validate_signature(&header, &decoding_key, jwt_token)
     }
 
     fn validate_signature(
