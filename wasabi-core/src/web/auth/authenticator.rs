@@ -206,7 +206,6 @@ impl AuthenticatorConfig {
             shared_secret.map(|str| Arc::new(DecodingKey::from_secret(str.as_ref().as_bytes())));
         let issuers = issuer
             .split(",")
-            .into_iter()
             .map(|iss| iss.split_once('=').unwrap_or((iss, "")))
             .map(|(iss, config)| (iss.to_owned(), config.to_owned()))
             .collect();
@@ -233,7 +232,7 @@ impl AuthenticatorConfig {
 
         validation.validate_nbf = true;
         validation.algorithms = Self::parse_algorithms(algorithms);
-        validation.iss = Some(issuers.iter().map(|(iss, _)| iss.to_owned()).collect());
+        validation.iss = Some(issuers.keys().map(String::to_owned).collect());
         validation.aud = Self::parse_set(audience);
 
         // If we chose to leave the required audiences empty, we skip validation entirely as
@@ -268,7 +267,7 @@ impl AuthenticatorConfig {
         if issuers.is_empty()
             || issuers
                 .iter()
-                .all(|(_, config)| *config == "" || *config == "secret")
+                .all(|(_, config)| config.is_empty() || *config == "secret")
         {
             if let Some(hmac_key) = hmac_key {
                 Ok(KeyFetchStrategy::Static(Arc::new(HmacKeyFetcher::new(
