@@ -1,3 +1,13 @@
+//! Internationalized strings with flexible serialization.
+//!
+//! Supports three representations that serialize/deserialize seamlessly:
+//! - `null` or empty string → `Empty`
+//! - `"simple string"` → `Simple` (single value for all languages)
+//! - `{"xx": "default", "de": "German", "fr": "French"}` → `Translations`
+//!
+//! The `"xx"` key represents the default/fallback language, returned when
+//! a requested language is not available.
+
 use serde::Deserialize;
 use serde::de::{Error, MapAccess, Visitor};
 use serde::ser::SerializeMap;
@@ -5,6 +15,7 @@ use serde::{Deserializer, Serialize, Serializer};
 use std::collections::HashMap;
 use std::fmt;
 
+/// A string that can hold translations for multiple languages.
 #[derive(Debug, Clone, Default)]
 pub enum I18nString {
     #[default]
@@ -16,9 +27,11 @@ pub enum I18nString {
     },
 }
 
+/// The key used to identify the default/fallback translation in serialized maps.
 pub const DEFAULT_LANGUAGE: &str = "xx";
 
 impl I18nString {
+    /// Returns the default translation, if any.
     pub fn standard(&self) -> Option<&str> {
         match self {
             I18nString::Empty => None,
@@ -27,6 +40,7 @@ impl I18nString {
         }
     }
 
+    /// Returns the translation for the given language code, falling back to the default.
     pub fn get(&self, lang: &str) -> Option<&str> {
         match self {
             I18nString::Empty => None,
