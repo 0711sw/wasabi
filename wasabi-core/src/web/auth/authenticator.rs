@@ -421,3 +421,216 @@ impl AuthenticatorConfig {
         Ok(token.claims)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    // translate_claims tests
+
+    #[test]
+    fn translate_claims_strips_prefix() {
+        let mut claims = ClaimsSet::new();
+        claims.insert("custom:tenant".to_string(), json!("abc"));
+        claims.insert("custom:role".to_string(), json!("admin"));
+        claims.insert("sub".to_string(), json!("user123"));
+
+        let translated = Authenticator::translate_claims(claims, "custom:");
+
+        assert_eq!(translated.get("tenant").unwrap(), &json!("abc"));
+        assert_eq!(translated.get("role").unwrap(), &json!("admin"));
+        assert_eq!(translated.get("sub").unwrap(), &json!("user123"));
+        assert!(translated.get("custom:tenant").is_none());
+    }
+
+    #[test]
+    fn translate_claims_leaves_non_matching_unchanged() {
+        let mut claims = ClaimsSet::new();
+        claims.insert("other:claim".to_string(), json!("value"));
+        claims.insert("sub".to_string(), json!("user123"));
+
+        let translated = Authenticator::translate_claims(claims, "custom:");
+
+        assert_eq!(translated.get("other:claim").unwrap(), &json!("value"));
+        assert_eq!(translated.get("sub").unwrap(), &json!("user123"));
+    }
+
+    // inject_locale_if_missing tests
+
+    #[test]
+    fn inject_locale_adds_default_when_missing() {
+        let mut claims = ClaimsSet::new();
+        claims.insert("sub".to_string(), json!("user123"));
+
+        Authenticator::inject_locale_if_missing(&mut claims, "de-DE");
+
+        assert_eq!(claims.get(CLAIM_LOCALE).unwrap(), &json!("de-DE"));
+    }
+
+    #[test]
+    fn inject_locale_preserves_existing() {
+        let mut claims = ClaimsSet::new();
+        claims.insert(CLAIM_LOCALE.to_string(), json!("fr-FR"));
+
+        Authenticator::inject_locale_if_missing(&mut claims, "de-DE");
+
+        assert_eq!(claims.get(CLAIM_LOCALE).unwrap(), &json!("fr-FR"));
+    }
+
+    // decode_payload tests
+
+    #[test]
+    fn decode_payload_extracts_claims() {
+        // JWT with payload: {"sub": "1234", "name": "Test"}
+        let jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0IiwibmFtZSI6IlRlc3QifQ.signature";
+
+        let claims = Authenticator::decode_payload(jwt).unwrap();
+
+        assert_eq!(claims.get("sub").unwrap(), &json!("1234"));
+        assert_eq!(claims.get("name").unwrap(), &json!("Test"));
+    }
+
+    #[test]
+    fn decode_payload_fails_on_invalid_jwt() {
+        let result = Authenticator::decode_payload("not-a-jwt");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn decode_payload_fails_on_invalid_base64() {
+        let result = Authenticator::decode_payload("header.!!!invalid!!!.signature");
+        assert!(result.is_err());
+    }
+
+    // parse_set tests
+
+    #[test]
+    fn parse_set_splits_by_comma() {
+        let result = AuthenticatorConfig::parse_set("a,b,c").unwrap();
+        assert!(result.contains("a"));
+        assert!(result.contains("b"));
+        assert!(result.contains("c"));
+        assert_eq!(result.len(), 3);
+    }
+
+    #[test]
+    fn parse_set_splits_by_semicolon() {
+        let result = AuthenticatorConfig::parse_set("a;b;c").unwrap();
+        assert!(result.contains("a"));
+        assert!(result.contains("b"));
+        assert!(result.contains("c"));
+    }
+
+    #[test]
+    fn parse_set_handles_mixed_separators() {
+        let result = AuthenticatorConfig::parse_set("a,b;c").unwrap();
+        assert_eq!(result.len(), 3);
+    }
+
+    #[test]
+    fn parse_set_trims_whitespace() {
+        let result = AuthenticatorConfig::parse_set(" a , b , c ").unwrap();
+        assert!(result.contains("a"));
+        assert!(result.contains("b"));
+        assert!(result.contains("c"));
+    }
+
+    #[test]
+    fn parse_set_returns_none_for_empty() {
+        assert!(AuthenticatorConfig::parse_set("").is_none());
+        assert!(AuthenticatorConfig::parse_set("  ").is_none());
+    }
+
+    // parse_algorithms tests
+
+    #[test]
+    fn parse_algorithms_parses_known_algorithms() {
+        let algs = AuthenticatorConfig::parse_algorithms("HS256,RS256");
+        assert!(algs.contains(&Algorithm::HS256));
+        assert!(algs.contains(&Algorithm::RS256));
+    }
+
+    #[test]
+    fn parse_algorithms_ignores_unknown() {
+        let algs = AuthenticatorConfig::parse_algorithms("HS256,UNKNOWN,RS256");
+        assert_eq!(algs.len(), 2);
+        assert!(algs.contains(&Algorithm::HS256));
+        assert!(algs.contains(&Algorithm::RS256));
+    }
+
+    #[test]
+    fn parse_algorithms_returns_empty_for_empty_input() {
+        let algs = AuthenticatorConfig::parse_algorithms("");
+        assert!(algs.is_empty());
+    }
+
+    // AuthenticatorConfig::new tests
+
+    #[test]
+    fn config_new_requires_secret_when_no_jwks() {
+        let result = AuthenticatorConfig::new(
+            None::<&str>,
+            "",
+            "https://issuer.example.com",
+            "",
+            "en-US".to_string(),
+            None,
+        );
+        assert!(result.is_err());
+        assert!(result.err().unwrap().to_string().contains("shared secret"));
+    }
+
+    #[test]
+    fn config_new_succeeds_with_secret() {
+        let result = AuthenticatorConfig::new(
+            Some("my-secret"),
+            "HS256",
+            "https://issuer.example.com",
+            "",
+            "en-US".to_string(),
+            None,
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn config_new_fails_on_invalid_issuer_config() {
+        let result = AuthenticatorConfig::new(
+            Some("my-secret"),
+            "",
+            "https://issuer.example.com=invalid:config",
+            "",
+            "en-US".to_string(),
+            None,
+        );
+        assert!(result.is_err());
+        assert!(result.err().unwrap().to_string().contains("invalid config"));
+    }
+
+    #[test]
+    fn config_new_accepts_jwks_config() {
+        let result = AuthenticatorConfig::new(
+            None::<&str>,
+            "",
+            "https://issuer.example.com=jwks:/.well-known/jwks.json",
+            "",
+            "en-US".to_string(),
+            None,
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn config_new_accepts_mixed_issuer_configs() {
+        let result = AuthenticatorConfig::new(
+            Some("my-secret"),
+            "",
+            "https://iss1.example.com=secret,https://iss2.example.com=jwks:/jwks.json",
+            "",
+            "en-US".to_string(),
+            None,
+        );
+        assert!(result.is_ok());
+    }
+}
