@@ -562,4 +562,254 @@ mod tests {
         let result = read_into_buffer(stream, 0).await.unwrap();
         assert!(result.is_empty());
     }
+
+    // buf_to_bytes tests
+
+    #[test]
+    fn buf_to_bytes_converts_buffer() {
+        let buf = Bytes::from("hello");
+        let result = buf_to_bytes(buf);
+        assert_eq!(result, Bytes::from("hello"));
+    }
+
+    #[test]
+    fn buf_to_bytes_handles_empty_buffer() {
+        let buf = Bytes::new();
+        let result = buf_to_bytes(buf);
+        assert!(result.is_empty());
+    }
+
+    // body_as_buffer tests
+
+    #[tokio::test]
+    async fn body_as_buffer_reads_valid_body() {
+        let stream = stream::iter(vec![
+            Ok::<Bytes, warp::Error>(Bytes::from("hello")),
+            Ok(Bytes::from(" world")),
+        ]);
+        let result = body_as_buffer(stream, 11, 100).await.unwrap();
+        assert_eq!(result, b"hello world");
+    }
+
+    #[tokio::test]
+    async fn body_as_buffer_rejects_empty_content_length() {
+        let stream = stream::iter(vec![Ok::<Bytes, warp::Error>(Bytes::new())]);
+        let result = body_as_buffer(stream, 0, 100).await;
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Empty"));
+    }
+
+    #[tokio::test]
+    async fn body_as_buffer_rejects_oversized_content_length() {
+        let stream = stream::iter(vec![Ok::<Bytes, warp::Error>(Bytes::from("data"))]);
+        let result = body_as_buffer(stream, 1000, 100).await;
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("too large"));
+    }
+
+    // as_stream tests
+
+    #[tokio::test]
+    async fn as_stream_returns_stream_for_valid_input() {
+        let stream = stream::iter(vec![Ok::<Bytes, std::io::Error>(Bytes::from("test"))]);
+        let result = as_stream(stream, 4, 100).await;
+
+        assert!(result.is_ok());
+        let mut pinned = result.unwrap();
+        let first = pinned.next().await.unwrap().unwrap();
+        assert_eq!(first, Bytes::from("test"));
+    }
+
+    #[tokio::test]
+    async fn as_stream_rejects_empty_content_length() {
+        let stream = stream::iter(vec![Ok::<Bytes, std::io::Error>(Bytes::new())]);
+        let result = as_stream(stream, 0, 100).await;
+
+        assert!(result.is_err());
+        assert!(result.err().unwrap().to_string().contains("Empty"));
+    }
+
+    #[tokio::test]
+    async fn as_stream_rejects_oversized_content() {
+        let stream = stream::iter(vec![Ok::<Bytes, std::io::Error>(Bytes::from("data"))]);
+        let result = as_stream(stream, 1000, 100).await;
+
+        assert!(result.is_err());
+        assert!(result.err().unwrap().to_string().contains("too large"));
+    }
+
+    // body_as_string tests
+
+    #[tokio::test]
+    async fn body_as_string_reads_valid_utf8() {
+        let stream = stream::iter(vec![Ok::<Bytes, warp::Error>(Bytes::from("hello"))]);
+        let result = body_as_string(stream, 5, 100).await.unwrap();
+        assert_eq!(result, "hello");
+    }
+
+    #[tokio::test]
+    async fn body_as_string_rejects_invalid_utf8() {
+        let stream = stream::iter(vec![Ok::<Bytes, warp::Error>(Bytes::from(vec![
+            0xff, 0xfe, 0x00, 0x01,
+        ]))]);
+        let result = body_as_string(stream, 4, 100).await;
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("UTF-8"));
+    }
+
+    // decode_json tests
+
+    #[tokio::test]
+    async fn decode_json_parses_valid_json() {
+        use serde::Deserialize;
+
+        #[derive(Deserialize, Debug, PartialEq)]
+        struct TestData {
+            name: String,
+            value: i32,
+        }
+
+        let json = r#"{"name": "test", "value": 42}"#;
+        let stream = stream::iter(vec![Ok::<Bytes, warp::Error>(Bytes::from(json))]);
+        let result: TestData = decode_json(stream, json.len() as u64, 1000).await.unwrap();
+
+        assert_eq!(
+            result,
+            TestData {
+                name: "test".to_string(),
+                value: 42
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn decode_json_rejects_invalid_json() {
+        #[derive(serde::Deserialize, Debug)]
+        struct TestData {
+            name: String,
+        }
+
+        let stream = stream::iter(vec![Ok::<Bytes, warp::Error>(Bytes::from("not json"))]);
+        let result: Result<TestData, _> = decode_json(stream, 8, 1000).await;
+
+        assert!(result.is_err());
+        assert!(result.err().unwrap().to_string().contains("Invalid JSON"));
+    }
+
+    // decode_form tests
+
+    #[tokio::test]
+    async fn decode_form_parses_valid_form_data() {
+        use serde::Deserialize;
+
+        #[derive(Deserialize, Debug, PartialEq)]
+        struct FormData {
+            username: String,
+            password: String,
+        }
+
+        let form = "username=alice&password=secret";
+        let stream = stream::iter(vec![Ok::<Bytes, warp::Error>(Bytes::from(form))]);
+        let result: FormData = decode_form(stream, form.len() as u64, 1000).await.unwrap();
+
+        assert_eq!(
+            result,
+            FormData {
+                username: "alice".to_string(),
+                password: "secret".to_string()
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn decode_form_handles_url_encoded_values() {
+        use serde::Deserialize;
+
+        #[derive(Deserialize, Debug, PartialEq)]
+        struct FormData {
+            query: String,
+        }
+
+        let form = "query=hello%20world";
+        let stream = stream::iter(vec![Ok::<Bytes, warp::Error>(Bytes::from(form))]);
+        let result: FormData = decode_form(stream, form.len() as u64, 1000).await.unwrap();
+
+        assert_eq!(
+            result,
+            FormData {
+                query: "hello world".to_string()
+            }
+        );
+    }
+
+    // into_response tests
+
+    #[test]
+    fn into_response_serializes_success() {
+        use serde::Serialize;
+
+        #[derive(Serialize)]
+        struct Response {
+            message: String,
+        }
+
+        let result: anyhow::Result<Response> = Ok(Response {
+            message: "ok".to_string(),
+        });
+        let response = into_response(result).unwrap();
+        let response = response.into_response();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers().get(CONTENT_TYPE).unwrap(),
+            "application/json"
+        );
+    }
+
+    #[test]
+    fn into_response_converts_error_to_rejection() {
+        let result: anyhow::Result<String> = Err(anyhow::anyhow!("Something failed"));
+        let response = into_response(result);
+
+        assert!(response.is_err());
+    }
+
+    // into_response_with_status tests
+
+    #[test]
+    fn into_response_with_status_uses_custom_status() {
+        use serde::Serialize;
+
+        #[derive(Serialize)]
+        struct Created {
+            id: u64,
+        }
+
+        let result: anyhow::Result<(StatusCode, Created)> =
+            Ok((StatusCode::CREATED, Created { id: 123 }));
+        let response = into_response_with_status(result).unwrap();
+        let response = response.into_response();
+
+        assert_eq!(response.status(), StatusCode::CREATED);
+    }
+
+    #[test]
+    fn into_response_with_status_preserves_api_error() {
+        use crate::web::error::ResultExt;
+
+        // Create an error with ApiError via the ResultExt trait
+        let result: anyhow::Result<(StatusCode, String)> = Err(anyhow::anyhow!("root cause"))
+            .context("wrapped")
+            .with_status(StatusCode::BAD_REQUEST);
+
+        let response = into_response_with_status(result);
+
+        assert!(response.is_err());
+        let rejection = response.err().unwrap();
+        let api_error = rejection.find::<ApiError>().unwrap();
+        assert_eq!(api_error.status, StatusCode::BAD_REQUEST);
+    }
 }
