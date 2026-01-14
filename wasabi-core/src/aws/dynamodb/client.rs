@@ -1,3 +1,9 @@
+//! DynamoDB client wrapper with table prefix support.
+//!
+//! Provides a thin wrapper around the AWS SDK client that automatically
+//! applies a table name prefix to all operations, enabling environment-based
+//! table isolation (e.g., `prod-users` vs `dev-users`).
+
 use anyhow::Context;
 use aws_sdk_dynamodb::Client;
 use aws_sdk_dynamodb::error::BuildError;
@@ -14,13 +20,40 @@ use std::env;
 use std::time::Duration;
 use tokio::time::sleep;
 
+/// DynamoDB client with automatic table name prefixing.
+///
+/// All table names passed to this client are automatically prefixed with
+/// the value of `DYNAMO_TABLE_PREFIX` environment variable. This allows
+/// the same code to work across different environments without changes.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// let client = DynamoClient::from_env().await?;
+///
+/// // With DYNAMO_TABLE_PREFIX=myapp-prod, this queries "myapp-prod-users"
+/// let result = client.query("users")
+///     .key_condition_expression("PK = :pk")
+///     .expression_attribute_values(":pk", AttributeValue::S("user#123".into()))
+///     .send()
+///     .await?;
+/// ```
 #[derive(Clone, Debug)]
 pub struct DynamoClient {
+    /// The underlying AWS SDK DynamoDB client.
     pub client: Client,
     table_prefix: String,
 }
 
 impl DynamoClient {
+    /// Creates a new client from environment configuration.
+    ///
+    /// Loads AWS credentials from the default credential chain and reads
+    /// `DYNAMO_TABLE_PREFIX` from the environment.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `DYNAMO_TABLE_PREFIX` is not set.
     pub async fn from_env() -> anyhow::Result<DynamoClient> {
         tracing::info!("Setting up DynamoDB....");
         let config = aws_config::load_from_env().await;
@@ -35,10 +68,16 @@ impl DynamoClient {
         })
     }
 
+    /// Returns the effective table name with prefix applied.
+    ///
+    /// Given logical name `users` and prefix `myapp-prod`, returns `myapp-prod-users`.
     pub fn effective_name(&self, table: &str) -> String {
         format!("{}-{}", self.table_prefix, table)
     }
 
+    /// Checks if a table exists in DynamoDB.
+    ///
+    /// Returns `true` if the table exists (in any state), `false` if not found.
     pub async fn does_table_exist(&self, name: &str) -> anyhow::Result<bool> {
         let effective_name = self.effective_name(name);
 
@@ -62,6 +101,23 @@ impl DynamoClient {
         }
     }
 
+    /// Creates a table if it doesn't already exist.
+    ///
+    /// The callback receives a [`CreateTableFluentBuilder`] with the table name
+    /// already set. Add key schema, attributes, and billing mode in the callback.
+    ///
+    /// Waits for the table to become `ACTIVE` before returning (up to ~2.5 minutes).
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// client.create_table("users", |builder| {
+    ///     Ok(builder
+    ///         .attribute_definitions(str_attribute("PK")?)
+    ///         .key_schema(with_hash_index("PK")?)
+    ///         .billing_mode(BillingMode::PayPerRequest))
+    /// }).await?;
+    /// ```
     pub async fn create_table<F>(&self, name: &str, callback: F) -> anyhow::Result<()>
     where
         F: FnOnce(CreateTableFluentBuilder) -> Result<CreateTableFluentBuilder, BuildError>,
@@ -126,12 +182,16 @@ impl DynamoClient {
         anyhow::bail!("Table '{}' did not become ACTIVE in time", effective_name);
     }
 
+    /// Starts a PutItem operation builder for the given table.
     pub fn put_item(&self, table_name: &str) -> PutItemFluentBuilder {
         self.client
             .put_item()
             .table_name(self.effective_name(table_name))
     }
 
+    /// Serializes an entity and creates a PutItem operation.
+    ///
+    /// Uses `serde_dynamo` to convert the entity to DynamoDB attribute values.
     pub fn put_entity<T: Serialize>(
         &self,
         table_name: &str,
@@ -143,24 +203,28 @@ impl DynamoClient {
         Ok(self.put_item(table_name).set_item(Some(item)))
     }
 
+    /// Starts a GetItem operation builder for the given table.
     pub fn get_item(&self, table_name: &str) -> GetItemFluentBuilder {
         self.client
             .get_item()
             .table_name(self.effective_name(table_name))
     }
 
+    /// Starts a Query operation builder for the given table.
     pub fn query(&self, table_name: &str) -> QueryFluentBuilder {
         self.client
             .query()
             .table_name(self.effective_name(table_name))
     }
 
+    /// Starts an UpdateItem operation builder for the given table.
     pub fn update_item(&self, table_name: &str) -> UpdateItemFluentBuilder {
         self.client
             .update_item()
             .table_name(self.effective_name(table_name))
     }
 
+    /// Starts a DeleteItem operation builder for the given table.
     pub fn delete_item(&self, table_name: &str) -> DeleteItemFluentBuilder {
         self.client
             .delete_item()
@@ -168,11 +232,15 @@ impl DynamoClient {
     }
 }
 
+/// Builder for constructing DynamoDB items with additional attributes.
+///
+/// Useful when you need to add computed or derived attributes to a serialized entity.
 pub struct ItemBuilder {
     item: HashMap<String, AttributeValue>,
 }
 
 impl ItemBuilder {
+    /// Creates a builder from a serializable entity.
     pub fn from_entity<T: Serialize>(entity: &T) -> anyhow::Result<ItemBuilder> {
         let item = serde_dynamo::aws_sdk_dynamodb_1::to_item(entity)
             .context("Error serializing entity into DynamoDB item")?;
@@ -180,11 +248,13 @@ impl ItemBuilder {
         Ok(ItemBuilder { item })
     }
 
+    /// Adds a string attribute to the item.
     pub fn add_str(&mut self, key: impl Into<String>, value: impl Into<String>) {
         self.item
             .insert(key.into(), AttributeValue::S(value.into()));
     }
 
+    /// Consumes the builder and returns the item map.
     pub fn build(self) -> HashMap<String, AttributeValue> {
         self.item
     }

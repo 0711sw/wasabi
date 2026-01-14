@@ -1,3 +1,23 @@
+//! DynamoDB client and query utilities.
+//!
+//! Provides ergonomic wrappers for common DynamoDB operations:
+//!
+//! - [`client::DynamoClient`] - Table-prefixed client for CRUD operations
+//! - [`schema`] - Helpers for defining table schemas and indexes
+//! - Query helpers for pagination and entity deserialization
+//!
+//! # Environment Variables
+//!
+//! | Variable | Description |
+//! |----------|-------------|
+//! | `DYNAMO_TABLE_PREFIX` | Prefix for all table names (required) |
+//!
+//! # Table Naming
+//!
+//! All table names are prefixed with `DYNAMO_TABLE_PREFIX`:
+//! - Logical name: `users`
+//! - Effective name: `{DYNAMO_TABLE_PREFIX}-users`
+
 use anyhow::Context;
 use aws_sdk_dynamodb::config::http::HttpResponse;
 use aws_sdk_dynamodb::error::SdkError;
@@ -11,9 +31,12 @@ use serde::de::DeserializeOwned;
 use std::collections::HashMap;
 use std::pin::Pin;
 
+/// DynamoDB client with table prefix support.
 pub mod client;
+/// Schema builder helpers for table creation.
 pub mod schema;
 
+/// Extracts the first entity from a query result.
 pub fn extract_entity<T: Serialize + DeserializeOwned>(
     output: QueryOutput,
 ) -> anyhow::Result<Option<T>> {
@@ -21,6 +44,7 @@ pub fn extract_entity<T: Serialize + DeserializeOwned>(
     deserialize_entity(first)
 }
 
+/// Deserializes a DynamoDB item into an entity.
 pub fn deserialize_entity<T: Serialize + DeserializeOwned>(
     values: Option<HashMap<String, AttributeValue>>,
 ) -> anyhow::Result<Option<T>> {
@@ -34,12 +58,14 @@ pub fn deserialize_entity<T: Serialize + DeserializeOwned>(
     }
 }
 
+/// Checks if a PutItem error is a conditional check failure.
 pub fn is_conditional_check_failed(err: &SdkError<PutItemError, HttpResponse>) -> bool {
     err.as_service_error()
         .map(PutItemError::is_conditional_check_failed_exception)
         .unwrap_or_default()
 }
 
+/// Finds the first entity matching a query, handling pagination internally.
 pub async fn find_first<E: Serialize + DeserializeOwned>(
     query_fluent_builder: QueryFluentBuilder,
 ) -> anyhow::Result<Option<E>> {
@@ -67,6 +93,10 @@ pub async fn find_first<E: Serialize + DeserializeOwned>(
     }
 }
 
+/// Returns a stream of entities from a paginated query.
+///
+/// Automatically handles DynamoDB pagination, yielding entities one at a time.
+/// The query must have a limit set.
 pub fn stream_all<E>(
     query_fluent_builder: QueryFluentBuilder,
 ) -> anyhow::Result<Pin<Box<dyn Stream<Item = anyhow::Result<E>> + Send>>>
@@ -130,6 +160,9 @@ where
     Ok(stream)
 }
 
+/// Collects all entities matching a query into a vector.
+///
+/// Convenience wrapper around [`stream_all`] that collects results.
 pub async fn find_all<E>(query_fluent_builder: QueryFluentBuilder) -> anyhow::Result<Vec<E>>
 where
     E: Serialize + DeserializeOwned + Send + 'static,
@@ -137,10 +170,62 @@ where
     stream_all(query_fluent_builder)?.try_collect().await
 }
 
+/// Generates a 32-character random ID suitable for DynamoDB keys.
 pub fn generate_id() -> String {
     crate::tools::id_generator::generate_id(32)
 }
 
+/// Creates a string [`AttributeValue`] from any string-like type.
 pub fn str(value: impl Into<String>) -> AttributeValue {
     AttributeValue::S(value.into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde::Deserialize;
+
+    #[derive(Debug, Serialize, Deserialize, PartialEq)]
+    struct TestEntity {
+        id: String,
+        name: String,
+        count: i32,
+    }
+
+    #[test]
+    fn deserialize_entity_returns_none_for_none() {
+        let result: anyhow::Result<Option<TestEntity>> = deserialize_entity(None);
+        assert!(result.unwrap().is_none());
+    }
+
+    #[test]
+    fn deserialize_entity_deserializes_valid_item() {
+        let mut item = HashMap::new();
+        item.insert("id".to_string(), AttributeValue::S("123".to_string()));
+        item.insert("name".to_string(), AttributeValue::S("test".to_string()));
+        item.insert("count".to_string(), AttributeValue::N("42".to_string()));
+
+        let result: Option<TestEntity> = deserialize_entity(Some(item)).unwrap();
+
+        assert_eq!(
+            result,
+            Some(TestEntity {
+                id: "123".to_string(),
+                name: "test".to_string(),
+                count: 42,
+            })
+        );
+    }
+
+    #[test]
+    fn str_creates_string_attribute_value() {
+        let attr = str("hello");
+        assert_eq!(attr, AttributeValue::S("hello".to_string()));
+    }
+
+    #[test]
+    fn generate_id_returns_32_char_string() {
+        let id = generate_id();
+        assert_eq!(id.len(), 32);
+    }
 }

@@ -1,3 +1,30 @@
+//! S3 client with ETag-based caching and multipart uploads.
+//!
+//! Provides an ergonomic wrapper around the AWS S3 SDK with:
+//!
+//! - **Bucket naming**: Automatically appends `S3_BUCKET_SUFFIX` to bucket prefixes
+//! - **Caching**: [`S3CachedObject`] uses ETags to avoid re-downloading unchanged files
+//! - **Multipart uploads**: Streams large files in 16MB chunks
+//!
+//! # Environment Variables
+//!
+//! | Variable | Description |
+//! |----------|-------------|
+//! | `S3_BUCKET_SUFFIX` | Suffix appended to bucket prefixes (required) |
+//!
+//! # Bucket Naming
+//!
+//! Buckets can be specified in three ways:
+//!
+//! ```rust,ignore
+//! // Full name (no suffix appended)
+//! BucketName::FullyQualifiedName("my-bucket".to_string())
+//!
+//! // Prefix + suffix: "data" + "." + S3_BUCKET_SUFFIX
+//! BucketName::ConstPrefix("data")
+//! BucketName::Prefix("data".to_string())
+//! ```
+
 use crate::web::error::ResultExt;
 use anyhow::Context;
 use async_trait::async_trait;
@@ -19,19 +46,33 @@ use tokio::sync::RwLock;
 use tokio::time::Duration;
 use tokio::time::Instant;
 
+/// Ideal part size for multipart uploads (16 MB).
 const MULTIPART_UPLOAD_IDEAL_PART_SIZE: usize = 16 * MB as usize;
+/// Buffer size for multipart uploads (16 MB + 16 KB headroom).
 const MULTIPART_UPLOAD_BUFFER_SIZE: usize = MULTIPART_UPLOAD_IDEAL_PART_SIZE + (16 * KB as usize);
 
+/// S3 client wrapper with bucket suffix support.
+///
+/// Automatically appends `S3_BUCKET_SUFFIX` to bucket prefixes, enabling
+/// environment-based bucket isolation (e.g., `data.prod.example.com` vs `data.dev.example.com`).
 #[derive(Clone, Debug)]
 pub struct S3Client {
+    /// The underlying AWS SDK S3 client.
     pub client: Client,
     bucket_suffix: String,
 }
 
+/// Bucket name specification.
+///
+/// Use `ConstPrefix` or `Prefix` for automatic suffix appending,
+/// or `FullyQualifiedName` for explicit bucket names.
 #[derive(Debug)]
 pub enum BucketName {
+    /// Exact bucket name (no suffix appended).
     FullyQualifiedName(String),
+    /// Static prefix + `S3_BUCKET_SUFFIX`.
     ConstPrefix(&'static str),
+    /// Dynamic prefix + `S3_BUCKET_SUFFIX`.
     Prefix(String),
 }
 
@@ -45,24 +86,31 @@ impl Display for BucketName {
     }
 }
 
+/// Trait for objects that can be fetched with caching.
 #[async_trait]
 pub trait CachedObject: Send + Sync {
+    /// Returns cached content if available and fresh, otherwise fetches.
     async fn fetch_cached(&self) -> anyhow::Result<Arc<Vec<u8>>>;
 
+    /// Always fetches fresh content (ignoring cache).
     async fn fetch(&self) -> anyhow::Result<Arc<Vec<u8>>>;
 
+    /// Fetches with optional cache bypass.
     async fn fetch_with_flush(&self, flush: bool) -> anyhow::Result<Arc<Vec<u8>>>;
 }
 
+/// In-memory cached object for testing or static content.
 pub struct StaticCachedObject {
     content: Vec<u8>,
 }
 
 impl StaticCachedObject {
+    /// Creates a new static cached object from raw bytes.
     pub fn new(content: Vec<u8>) -> Self {
         StaticCachedObject { content }
     }
 
+    /// Creates a new static cached object from a string.
     pub fn from_string(content: &str) -> Self {
         StaticCachedObject {
             content: content.as_bytes().to_vec(),
@@ -85,6 +133,12 @@ impl CachedObject for StaticCachedObject {
     }
 }
 
+/// S3 object with ETag-based caching.
+///
+/// Caches object content in memory and uses S3 ETags to detect changes.
+/// When cache expires, checks ETag before re-downloading to save bandwidth.
+///
+/// Multiple concurrent fetches are coalesced - only one S3 request is made.
 pub struct S3CachedObject {
     client: S3Client,
     minimum_cache_duration: Duration,
@@ -95,6 +149,7 @@ pub struct S3CachedObject {
     notify: Notify,
 }
 
+/// Internal cache state.
 struct S3CachedObjectState {
     content: Option<Arc<Vec<u8>>>,
     etag: String,
@@ -102,6 +157,14 @@ struct S3CachedObjectState {
 }
 
 impl S3Client {
+    /// Creates a new client from environment configuration.
+    ///
+    /// Loads AWS credentials from the default credential chain and reads
+    /// `S3_BUCKET_SUFFIX` from the environment.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `S3_BUCKET_SUFFIX` is not set.
     pub async fn from_env() -> anyhow::Result<S3Client> {
         tracing::info!("Setting up S3....");
         let config = aws_config::load_from_env().await;
@@ -120,6 +183,9 @@ impl S3Client {
         })
     }
 
+    /// Returns the effective bucket name with suffix applied.
+    ///
+    /// For `ConstPrefix("data")` with suffix `prod.example.com`, returns `data.prod.example.com`.
     pub fn effective_name(&self, bucket: &BucketName) -> String {
         match bucket {
             BucketName::FullyQualifiedName(name) => name.clone(),
@@ -128,6 +194,9 @@ impl S3Client {
         }
     }
 
+    /// Checks if a bucket exists in S3.
+    ///
+    /// Returns `true` if the bucket exists, `false` if not found.
     #[tracing::instrument(skip(self), ret, err(Display))]
     pub async fn does_bucket_exist(&self, bucket: &BucketName) -> anyhow::Result<bool> {
         let effective_name = self.effective_name(bucket);
@@ -151,6 +220,9 @@ impl S3Client {
             Err(e) => Err(e).context(format!("Cannot access bucket '{}'", effective_name)),
         }
     }
+    /// Creates a bucket if it doesn't already exist.
+    ///
+    /// Uses the client's configured region for the bucket location.
     #[tracing::instrument(skip(self), err(Display))]
     pub async fn create_bucket(&self, name: &BucketName) -> anyhow::Result<()> {
         let effective_name = self.effective_name(name);
@@ -195,6 +267,7 @@ impl S3Client {
         }
     }
 
+    /// Deletes an object from S3.
     #[tracing::instrument(level = "debug", skip(self), ret(Debug), err(Display))]
     pub async fn delete_object(&self, bucket: &BucketName, key: &str) -> anyhow::Result<()> {
         let effective_bucket = self.effective_name(bucket);
@@ -216,6 +289,9 @@ impl S3Client {
         Ok(())
     }
 
+    /// Uploads an object to S3.
+    ///
+    /// For large files, consider using [`multipart_upload`](Self::multipart_upload) instead.
     #[tracing::instrument(level = "debug", skip(self, body), err(Display))]
     pub async fn put_object(
         &self,
@@ -242,6 +318,7 @@ impl S3Client {
         Ok(())
     }
 
+    /// Downloads an object from S3.
     #[tracing::instrument(level = "debug", skip(self), err(Display))]
     pub async fn get_object(&self, bucket: &BucketName, object_key: &str) -> anyhow::Result<Bytes> {
         let effective_bucket = self.effective_name(bucket);
@@ -275,6 +352,9 @@ impl S3Client {
         Ok(data)
     }
 
+    /// Uploads a large object using S3 multipart upload.
+    ///
+    /// Streams data in 16MB chunks. Automatically aborts the upload on failure.
     #[tracing::instrument(level = "debug", skip(self, stream), err(Display))]
     pub async fn multipart_upload(
         &self,
@@ -423,6 +503,10 @@ impl S3Client {
         Ok(())
     }
 
+    /// Creates a cached object reference for repeated access.
+    ///
+    /// The returned [`S3CachedObject`] caches content in memory and uses ETags
+    /// to avoid re-downloading unchanged files after the cache duration expires.
     #[tracing::instrument(level = "debug", skip(self), ret)]
     pub fn cached_object(
         &self,
@@ -617,10 +701,45 @@ impl S3CachedObject {
 
 #[cfg(test)]
 mod tests {
-    use crate::aws::s3::BucketName;
-    use crate::aws::s3::S3Client;
+    use super::*;
     use crate::aws::test::test_run_id;
     use std::env;
+
+    #[test]
+    fn bucket_name_display_shows_full_name() {
+        let name = BucketName::FullyQualifiedName("my-bucket".to_string());
+        assert_eq!(format!("{}", name), "my-bucket");
+    }
+
+    #[test]
+    fn bucket_name_display_shows_prefix_with_ellipsis() {
+        let name = BucketName::ConstPrefix("data");
+        assert_eq!(format!("{}", name), "data...");
+
+        let name = BucketName::Prefix("uploads".to_string());
+        assert_eq!(format!("{}", name), "uploads...");
+    }
+
+    #[tokio::test]
+    async fn static_cached_object_returns_content() {
+        let obj = StaticCachedObject::new(vec![1, 2, 3]);
+        let content = obj.fetch().await.unwrap();
+        assert_eq!(*content, vec![1, 2, 3]);
+    }
+
+    #[tokio::test]
+    async fn static_cached_object_from_string_returns_bytes() {
+        let obj = StaticCachedObject::from_string("hello");
+        let content = obj.fetch_cached().await.unwrap();
+        assert_eq!(*content, b"hello".to_vec());
+    }
+
+    #[tokio::test]
+    async fn static_cached_object_fetch_with_flush_ignores_flush() {
+        let obj = StaticCachedObject::new(vec![42]);
+        let content = obj.fetch_with_flush(true).await.unwrap();
+        assert_eq!(*content, vec![42]);
+    }
 
     #[tokio::test]
     #[ignore]

@@ -1,9 +1,23 @@
+//! AWS Bedrock AI model integration for streaming responses.
+//!
+//! Provides helpers for consuming Bedrock's `ConverseStream` API and converting
+//! events to Server-Sent Events (SSE) for web clients.
+//!
+//! # Event Types
+//!
+//! - `content` - Text chunks from the model
+//! - `toolUse` - Tool/function call requests
+//! - `usage` - Token usage metadata
+//! - `done` - Stream completion signal
+//! - `error` - Error messages
+
 use aws_sdk_bedrockruntime::primitives::event_stream::EventReceiver;
 use aws_sdk_bedrockruntime::types::error::ConverseStreamOutputError;
 use aws_sdk_bedrockruntime::types::{ConverseStreamOutput, ToolUseBlockStart};
 use serde_json::json;
 use warp::sse::Event;
 
+/// Events emitted by Bedrock model responses.
 pub enum ModelEvent {
     Text(String),
     ToolUse(ToolUse),
@@ -14,10 +28,14 @@ pub enum ModelEvent {
     Done,
 }
 
+/// Tool/function call request from the model.
 #[derive(Default, Debug)]
 pub struct ToolUse {
+    /// Unique ID for correlating tool results.
     id: String,
+    /// Tool name to invoke.
     name: String,
+    /// JSON-encoded tool arguments.
     input: String,
 }
 
@@ -46,12 +64,16 @@ impl From<ModelEvent> for Event {
     }
 }
 
+/// Creates an SSE error event.
 pub fn sse_error(msg: impl Into<String>) -> Event {
     Event::default().event("error").data(msg.into())
 }
 
 type Receiver = EventReceiver<ConverseStreamOutput, ConverseStreamOutputError>;
 
+/// Reads the next event from a Bedrock ConverseStream.
+///
+/// Loops internally to skip non-content events, returning only meaningful events.
 pub async fn read_next_event(receiver: &mut Receiver) -> Result<ModelEvent, String> {
     loop {
         match receiver.recv().await {
