@@ -1,3 +1,14 @@
+//! OpenTelemetry integration for distributed tracing.
+//!
+//! Exports traces to an OTLP-compatible collector (e.g., Jaeger, Tempo, AWS X-Ray).
+//! Traces include service metadata from environment variables:
+//!
+//! - `CLUSTER_ID` → `service.name`
+//! - `TASK_ID` → `service.instance.id`
+//! - `APP_VERSION` → `service.version`
+//!
+//! Hardcoded for AWS ECS deployment (`cloud.provider=aws`, `cloud.platform=aws_ecs`).
+
 use crate::{APP_VERSION, CLUSTER_ID, TASK_ID};
 use anyhow::Context;
 use opentelemetry::KeyValue;
@@ -12,6 +23,10 @@ use tracing_opentelemetry::OpenTelemetryLayer;
 use tracing_subscriber::registry::LookupSpan;
 use tracing_subscriber::{EnvFilter, Layer};
 
+/// Creates an OpenTelemetry tracing layer that exports to OTLP.
+///
+/// Requires `OTEL_EXPORTER_OTLP_ENDPOINT` to be set. Uses `RUST_TRACE` for
+/// filtering (defaults to `debug`).
 pub fn setup_open_telemetry_layer<S>() -> anyhow::Result<impl Layer<S>>
 where
     S: Subscriber + for<'span> LookupSpan<'span>,
@@ -27,6 +42,7 @@ where
     Ok(layer)
 }
 
+/// Configures the OpenTelemetry SDK with batch export and service metadata.
 fn setup_open_telemetry(endpoint: String) -> anyhow::Result<SdkTracerProvider> {
     let exporter = SpanExporter::builder()
         .with_tonic()

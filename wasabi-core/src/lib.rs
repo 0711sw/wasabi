@@ -109,7 +109,9 @@
 //!
 //! | Variable | Description | Default |
 //! |----------|-------------|---------|
-//! | `OTEL_EXPORTER_OTLP_ENDPOINT` | OpenTelemetry OTLP endpoint | `http://localhost:4317` |
+//! | `RUST_LOG` | Console log filter (e.g., `info`, `myapp=debug`) | `info` |
+//! | `RUST_TRACE` | OpenTelemetry trace filter | `debug` |
+//! | `OTEL_EXPORTER_OTLP_ENDPOINT` | OpenTelemetry OTLP endpoint | (required for OTel) |
 
 use std::env;
 use std::sync::LazyLock;

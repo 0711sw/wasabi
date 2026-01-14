@@ -1,9 +1,18 @@
+//! Pretty console log formatting with colors and timestamps.
+//!
+//! Provides human-friendly log output for local development with:
+//! - Colorized log levels (green=INFO, yellow=WARN, red=ERROR, etc.)
+//! - Local timestamps with millisecond precision
+//! - Visual span nesting with `|` markers
+//! - Dimmed metadata for reduced visual noise
+
 use nu_ansi_term::{Color, Style};
 use tracing::{Event, Level, Subscriber};
 use tracing_subscriber::fmt::format::Writer;
 use tracing_subscriber::fmt::{FmtContext, FormatEvent, FormatFields, FormattedFields};
 use tracing_subscriber::registry::LookupSpan;
 
+/// Custom log formatter for colorized, human-readable console output.
 pub struct PrettyConsoleLogFormat;
 
 macro_rules! styled {
