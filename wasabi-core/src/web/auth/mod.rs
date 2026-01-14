@@ -18,19 +18,37 @@ pub mod user;
 
 mod jwks;
 
+/// Prefix for Bearer token authentication in the Authorization header.
 const PREFIX_BEARER_TOKEN: &str = "Bearer ";
 
+/// Fallback locale injected into claims when the token doesn't specify one.
 pub(crate) const DEFAULT_LOCALE: &str = "en-US";
 
-// Standard JWT claim names
+/// JWT "aud" (audience) claim - identifies the recipients the token is intended for.
 pub const CLAIM_AUD: &str = "aud";
+
+/// JWT "iss" (issuer) claim - identifies the principal that issued the token.
 pub const CLAIM_ISS: &str = "iss";
+
+/// JWT "sub" (subject) claim - identifies the principal (typically user ID) that is the subject of the token.
 pub const CLAIM_SUB: &str = "sub";
+
+/// JWT "act" (actor) claim - identifies the acting party in delegation scenarios (e.g., service-to-service impersonation).
 pub const CLAIM_ACT: &str = "act";
+
+/// Locale claim - the user's preferred locale (e.g., "en-US", "de-DE").
 pub const CLAIM_LOCALE: &str = "locale";
+
+/// Tenant claim - identifies the tenant/organization the user belongs to in multi-tenant systems.
 pub const CLAIM_TENANT: &str = "tenant";
+
+/// Name claim - the user's full display name.
 pub const CLAIM_NAME: &str = "name";
+
+/// Email claim - the user's email address.
 pub const CLAIM_EMAIL: &str = "email";
+
+/// Permissions claim - an array of permission strings granted to the user.
 pub const CLAIM_PERMISSIONS: &str = "permissions";
 
 #[derive(Deserialize)]
@@ -242,15 +260,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn parse_headers_with_external_jwt_succeeds() {
-        let jwt = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.\
-                         eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwidGVuYW50IjoiMjE1MTYyMzkwMjIifQ.\
-                         JWvhLyGHKP4cF7jFpxpRmnWmanVay1gNzwkLF9dE5YE";
-
-        let authenticator = Arc::new(Authenticator::with_simple_secret("external-secret"));
-        let user = parse_jwt_token(Some(jwt.to_owned()), authenticator)
-            .await
+    async fn parse_headers_with_generated_jwt_succeeds() {
+        let token = Builder::new()
+            .with_string(CLAIM_SUB, "1234567890")
+            .with_string(CLAIM_TENANT, "21516239022")
+            .with_string(CLAIM_NAME, "John Doe")
+            .into_token("test-secret")
             .unwrap();
+
+        let authenticator = Arc::new(Authenticator::with_simple_secret("test-secret"));
+        let user = parse_jwt_token(Some(token), authenticator).await.unwrap();
         assert_eq!(user.tenant_id().unwrap(), "21516239022");
         assert_eq!(user.user_id().unwrap(), "1234567890");
         assert_eq!(user.full_name().unwrap(), "John Doe");
@@ -258,13 +277,16 @@ mod tests {
 
     #[tokio::test]
     async fn parse_headers_with_bearer_token_succeeds() {
-        let jwt = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.\
-                         eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwidGVuYW50IjoiMjE1MTYyMzkwMjIifQ.\
-                         JWvhLyGHKP4cF7jFpxpRmnWmanVay1gNzwkLF9dE5YE";
+        let token = Builder::new()
+            .with_string(CLAIM_SUB, "1234567890")
+            .with_string(CLAIM_TENANT, "21516239022")
+            .with_string(CLAIM_NAME, "John Doe")
+            .into_token("test-secret")
+            .unwrap();
 
-        let authenticator = Arc::new(Authenticator::with_simple_secret("external-secret"));
+        let authenticator = Arc::new(Authenticator::with_simple_secret("test-secret"));
         assert!(
-            parse_jwt_token(Some(format!("Bearer {}", jwt)), authenticator)
+            parse_jwt_token(Some(format!("Bearer {}", token)), authenticator)
                 .await
                 .is_ok()
         );
@@ -272,12 +294,13 @@ mod tests {
 
     #[tokio::test]
     async fn parse_headers_with_invalid_secret_fails() {
-        let jwt = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.\
-                         eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwidGVuYW50IjoiMjE1MTYyMzkwMjIifQ.\
-                         JWvhLyGHKP4cF7jFpxpRmnWmanVay1gNzwkLF9dE5YE";
+        let token = Builder::new()
+            .with_string(CLAIM_SUB, "1234567890")
+            .into_token("correct-secret")
+            .unwrap();
 
         let authenticator = Arc::new(Authenticator::with_simple_secret("wrong-secret"));
-        let err = parse_jwt_token(Some(jwt.to_owned()), authenticator)
+        let err = parse_jwt_token(Some(token), authenticator)
             .await
             .unwrap_err();
         let api_error = err.downcast_ref::<ApiError>().unwrap();

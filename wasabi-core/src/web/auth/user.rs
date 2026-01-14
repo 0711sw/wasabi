@@ -176,6 +176,7 @@ pub(crate) mod tests {
     use anyhow::Context;
     use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
     use serde_json::{Value, json};
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     pub struct Builder {
         jwt_token: String,
@@ -184,9 +185,19 @@ pub(crate) mod tests {
 
     impl Builder {
         pub fn new() -> Self {
+            // Set exp to 1 hour from now by default
+            let exp = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_secs()
+                + 3600;
+
+            let mut claims = ClaimsSet::new();
+            claims.insert("exp".to_owned(), Value::from(exp));
+
             Builder {
                 jwt_token: String::new(),
-                claims: ClaimsSet::new(),
+                claims,
             }
         }
 

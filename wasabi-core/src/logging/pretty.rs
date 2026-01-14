@@ -70,8 +70,9 @@ impl PrettyConsoleLogFormat {
         N: for<'a> FormatFields<'a> + 'static,
     {
         if let Some(mut scope) = ctx.event_scope() {
-            if event.metadata().is_span() {
-                if let Some(span) = scope.next() {
+            if event.metadata().is_span()
+                && let Some(span) = scope.next()
+            {
                     styled!(writer, Style::new().fg(Color::Magenta), {
                         write!(writer, "=> ")?;
                     });
@@ -87,7 +88,6 @@ impl PrettyConsoleLogFormat {
                     if !fields.is_empty() {
                         write!(writer, "{{{}}}", fields)?;
                     }
-                }
             }
         } else {
             Self::format_target(writer, event)?;

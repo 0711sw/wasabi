@@ -63,7 +63,7 @@ impl StaticCachedObject {
         StaticCachedObject { content }
     }
 
-    pub fn from_str(content: &str) -> Self {
+    pub fn from_string(content: &str) -> Self {
         StaticCachedObject {
             content: content.as_bytes().to_vec(),
         }

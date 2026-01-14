@@ -221,6 +221,27 @@ impl KeyFetcher for JwksFetcher {
 }
 
 impl AuthenticatorConfig {
+    /// Creates a test configuration with a custom key fetcher for a given issuer.
+    #[cfg(test)]
+    pub(crate) fn with_custom_key_fetcher(
+        issuer: &str,
+        key_fetcher: Arc<dyn KeyFetcher>,
+        default_locale: String,
+    ) -> Self {
+        let mut issuers = HashMap::new();
+        issuers.insert(issuer.to_owned(), String::new());
+
+        let mut fetcher_map = HashMap::new();
+        fetcher_map.insert(issuer.to_owned(), key_fetcher);
+
+        AuthenticatorConfig {
+            validation: Self::build_validation("", &issuers, ""),
+            default_locale,
+            custom_claim_prefix: None,
+            key_fetcher: KeyFetchStrategy::PerIssuer(fetcher_map),
+        }
+    }
+
     /// Creates a new authenticator configuration.
     ///
     /// Issuers can include per-issuer config: `issuer=jwks:/path` or `issuer=secret`.
@@ -256,9 +277,6 @@ impl AuthenticatorConfig {
         audience: &str,
     ) -> Validation {
         let mut validation = Validation::default();
-
-        #[cfg(test)]
-        validation.required_spec_claims.clear();
 
         validation.validate_nbf = true;
         validation.algorithms = Self::parse_algorithms(algorithms);
@@ -632,5 +650,683 @@ mod tests {
             None,
         );
         assert!(result.is_ok());
+    }
+
+    // parse_jwt tests
+
+    #[tokio::test]
+    async fn parse_jwt_returns_claims_for_valid_token() {
+        use crate::web::auth::user::tests::Builder;
+        use crate::web::auth::{CLAIM_NAME, CLAIM_SUB, CLAIM_TENANT};
+
+        let token = Builder::new()
+            .with_string(CLAIM_SUB, "user-123")
+            .with_string(CLAIM_TENANT, "tenant-456")
+            .with_string(CLAIM_NAME, "Test User")
+            .into_token("test-secret")
+            .unwrap();
+
+        let authenticator = Authenticator::with_simple_secret("test-secret");
+        let claims = authenticator.parse_jwt(&token).await.unwrap();
+
+        assert_eq!(claims.get(CLAIM_SUB).unwrap(), &json!("user-123"));
+        assert_eq!(claims.get(CLAIM_TENANT).unwrap(), &json!("tenant-456"));
+        assert_eq!(claims.get(CLAIM_NAME).unwrap(), &json!("Test User"));
+    }
+
+    #[tokio::test]
+    async fn parse_jwt_injects_default_locale() {
+        use crate::web::auth::user::tests::Builder;
+        use crate::web::auth::CLAIM_SUB;
+
+        let token = Builder::new()
+            .with_string(CLAIM_SUB, "user-123")
+            .into_token("test-secret")
+            .unwrap();
+
+        let authenticator = Authenticator::with_simple_secret("test-secret");
+        let claims = authenticator.parse_jwt(&token).await.unwrap();
+
+        assert_eq!(claims.get(CLAIM_LOCALE).unwrap(), &json!("en-US"));
+    }
+
+    #[tokio::test]
+    async fn parse_jwt_fails_with_wrong_secret() {
+        use crate::web::auth::user::tests::Builder;
+        use crate::web::auth::CLAIM_SUB;
+
+        let token = Builder::new()
+            .with_string(CLAIM_SUB, "user-123")
+            .into_token("correct-secret")
+            .unwrap();
+
+        let authenticator = Authenticator::with_simple_secret("wrong-secret");
+        let result = authenticator.parse_jwt(&token).await;
+
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn parse_jwt_fails_with_invalid_token() {
+        let authenticator = Authenticator::with_simple_secret("test-secret");
+        let result = authenticator.parse_jwt("not.a.valid-jwt").await;
+
+        assert!(result.is_err());
+    }
+
+    // add_fetcher tests
+
+    struct TestConfigFetcher {
+        config: Arc<AuthenticatorConfig>,
+        match_claim: String,
+        match_value: String,
+    }
+
+    #[async_trait]
+    impl ConfigFetcher for TestConfigFetcher {
+        async fn fetch(&self, claims: &ClaimsSet) -> Option<Arc<AuthenticatorConfig>> {
+            if claims
+                .get(&self.match_claim)
+                .and_then(|v| v.as_str())
+                .map(|v| v == self.match_value)
+                .unwrap_or(false)
+            {
+                Some(self.config.clone())
+            } else {
+                None
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn parse_jwt_uses_fetched_config_when_matched() {
+        use crate::web::auth::user::tests::Builder;
+        use crate::web::auth::{CLAIM_SUB, CLAIM_TENANT};
+
+        // Token signed with "fetcher-secret"
+        let token = Builder::new()
+            .with_string(CLAIM_SUB, "user-123")
+            .with_string(CLAIM_TENANT, "special-tenant")
+            .into_token("fetcher-secret")
+            .unwrap();
+
+        // Default authenticator uses "default-secret" (won't work for this token)
+        let mut authenticator = Authenticator::with_simple_secret("default-secret");
+
+        // Add fetcher that returns config with "fetcher-secret" for special-tenant
+        let fetcher_config = Arc::new(
+            AuthenticatorConfig::new(
+                Some("fetcher-secret"),
+                "",
+                "",
+                "",
+                "de-DE".to_string(),
+                None,
+            )
+            .unwrap(),
+        );
+        authenticator.add_fetcher(Box::new(TestConfigFetcher {
+            config: fetcher_config,
+            match_claim: CLAIM_TENANT.to_string(),
+            match_value: "special-tenant".to_string(),
+        }));
+
+        // Should succeed because fetcher provides the correct secret
+        let claims = authenticator.parse_jwt(&token).await.unwrap();
+        assert_eq!(claims.get(CLAIM_SUB).unwrap(), &json!("user-123"));
+        // Should use fetcher's default locale
+        assert_eq!(claims.get(CLAIM_LOCALE).unwrap(), &json!("de-DE"));
+    }
+
+    #[tokio::test]
+    async fn parse_jwt_falls_back_to_default_config_when_no_fetcher_matches() {
+        use crate::web::auth::user::tests::Builder;
+        use crate::web::auth::{CLAIM_SUB, CLAIM_TENANT};
+
+        // Token signed with "default-secret"
+        let token = Builder::new()
+            .with_string(CLAIM_SUB, "user-456")
+            .with_string(CLAIM_TENANT, "normal-tenant")
+            .into_token("default-secret")
+            .unwrap();
+
+        let mut authenticator = Authenticator::with_simple_secret("default-secret");
+
+        // Add fetcher that only matches "special-tenant"
+        let fetcher_config = Arc::new(
+            AuthenticatorConfig::new(
+                Some("fetcher-secret"),
+                "",
+                "",
+                "",
+                "de-DE".to_string(),
+                None,
+            )
+            .unwrap(),
+        );
+        authenticator.add_fetcher(Box::new(TestConfigFetcher {
+            config: fetcher_config,
+            match_claim: CLAIM_TENANT.to_string(),
+            match_value: "special-tenant".to_string(),
+        }));
+
+        // Should succeed using default config (fetcher doesn't match)
+        let claims = authenticator.parse_jwt(&token).await.unwrap();
+        assert_eq!(claims.get(CLAIM_SUB).unwrap(), &json!("user-456"));
+        // Should use default locale from default config
+        assert_eq!(claims.get(CLAIM_LOCALE).unwrap(), &json!("en-US"));
+    }
+
+    #[tokio::test]
+    async fn parse_jwt_fails_when_fetcher_matches_but_secret_wrong() {
+        use crate::web::auth::user::tests::Builder;
+        use crate::web::auth::{CLAIM_SUB, CLAIM_TENANT};
+
+        // Token signed with "actual-secret"
+        let token = Builder::new()
+            .with_string(CLAIM_SUB, "user-123")
+            .with_string(CLAIM_TENANT, "special-tenant")
+            .into_token("actual-secret")
+            .unwrap();
+
+        let mut authenticator = Authenticator::with_simple_secret("default-secret");
+
+        // Fetcher returns config with wrong secret
+        let fetcher_config = Arc::new(
+            AuthenticatorConfig::new(
+                Some("wrong-secret"),
+                "",
+                "",
+                "",
+                "de-DE".to_string(),
+                None,
+            )
+            .unwrap(),
+        );
+        authenticator.add_fetcher(Box::new(TestConfigFetcher {
+            config: fetcher_config,
+            match_claim: CLAIM_TENANT.to_string(),
+            match_value: "special-tenant".to_string(),
+        }));
+
+        // Should fail because fetcher's secret doesn't match
+        let result = authenticator.parse_jwt(&token).await;
+        assert!(result.is_err());
+    }
+
+    // Multi-issuer tests
+
+    #[tokio::test]
+    async fn multi_issuer_shared_secret_accepts_valid_issuer() {
+        use crate::web::auth::user::tests::Builder;
+        use crate::web::auth::{CLAIM_ISS, CLAIM_SUB};
+
+        let token = Builder::new()
+            .with_string(CLAIM_ISS, "https://issuer1.example.com")
+            .with_string(CLAIM_SUB, "user-123")
+            .into_token("shared-secret")
+            .unwrap();
+
+        let config = AuthenticatorConfig::new(
+            Some("shared-secret"),
+            "",
+            "https://issuer1.example.com,https://issuer2.example.com",
+            "",
+            "en-US".to_string(),
+            None,
+        )
+        .unwrap();
+        let authenticator = Authenticator::new(config);
+
+        let claims = authenticator.parse_jwt(&token).await.unwrap();
+        assert_eq!(claims.get(CLAIM_SUB).unwrap(), &json!("user-123"));
+        assert_eq!(
+            claims.get(CLAIM_ISS).unwrap(),
+            &json!("https://issuer1.example.com")
+        );
+    }
+
+    #[tokio::test]
+    async fn multi_issuer_shared_secret_accepts_second_issuer() {
+        use crate::web::auth::user::tests::Builder;
+        use crate::web::auth::{CLAIM_ISS, CLAIM_SUB};
+
+        let token = Builder::new()
+            .with_string(CLAIM_ISS, "https://issuer2.example.com")
+            .with_string(CLAIM_SUB, "user-456")
+            .into_token("shared-secret")
+            .unwrap();
+
+        let config = AuthenticatorConfig::new(
+            Some("shared-secret"),
+            "",
+            "https://issuer1.example.com,https://issuer2.example.com",
+            "",
+            "en-US".to_string(),
+            None,
+        )
+        .unwrap();
+        let authenticator = Authenticator::new(config);
+
+        let claims = authenticator.parse_jwt(&token).await.unwrap();
+        assert_eq!(claims.get(CLAIM_SUB).unwrap(), &json!("user-456"));
+    }
+
+    #[tokio::test]
+    async fn multi_issuer_rejects_unknown_issuer() {
+        use crate::web::auth::user::tests::Builder;
+        use crate::web::auth::{CLAIM_ISS, CLAIM_SUB};
+
+        let token = Builder::new()
+            .with_string(CLAIM_ISS, "https://unknown-issuer.example.com")
+            .with_string(CLAIM_SUB, "user-123")
+            .into_token("shared-secret")
+            .unwrap();
+
+        let config = AuthenticatorConfig::new(
+            Some("shared-secret"),
+            "",
+            "https://issuer1.example.com,https://issuer2.example.com",
+            "",
+            "en-US".to_string(),
+            None,
+        )
+        .unwrap();
+        let authenticator = Authenticator::new(config);
+
+        let result = authenticator.parse_jwt(&token).await;
+        assert!(result.is_err());
+    }
+
+    // Note: multi_issuer_rejects_token_without_issuer is not testable because
+    // #[cfg(test)] clears required_spec_claims, disabling issuer requirement in tests.
+
+    #[tokio::test]
+    async fn per_issuer_strategy_with_mixed_config_accepts_secret_issuer() {
+        use crate::web::auth::user::tests::Builder;
+        use crate::web::auth::{CLAIM_ISS, CLAIM_SUB};
+
+        // Token from issuer that uses shared secret
+        let token = Builder::new()
+            .with_string(CLAIM_ISS, "https://secret-issuer.example.com")
+            .with_string(CLAIM_SUB, "user-123")
+            .into_token("shared-secret")
+            .unwrap();
+
+        // Mixed config: one issuer uses secret, another uses jwks
+        let config = AuthenticatorConfig::new(
+            Some("shared-secret"),
+            "",
+            "https://secret-issuer.example.com=secret,https://jwks-issuer.example.com=jwks:/.well-known/jwks.json",
+            "",
+            "en-US".to_string(),
+            None,
+        )
+        .unwrap();
+        let authenticator = Authenticator::new(config);
+
+        let claims = authenticator.parse_jwt(&token).await.unwrap();
+        assert_eq!(claims.get(CLAIM_SUB).unwrap(), &json!("user-123"));
+    }
+
+    #[tokio::test]
+    async fn per_issuer_strategy_rejects_unknown_issuer() {
+        use crate::web::auth::user::tests::Builder;
+        use crate::web::auth::{CLAIM_ISS, CLAIM_SUB};
+
+        let token = Builder::new()
+            .with_string(CLAIM_ISS, "https://unknown.example.com")
+            .with_string(CLAIM_SUB, "user-123")
+            .into_token("shared-secret")
+            .unwrap();
+
+        // Mixed config triggers PerIssuer strategy
+        let config = AuthenticatorConfig::new(
+            Some("shared-secret"),
+            "",
+            "https://secret-issuer.example.com=secret,https://jwks-issuer.example.com=jwks:/.well-known/jwks.json",
+            "",
+            "en-US".to_string(),
+            None,
+        )
+        .unwrap();
+        let authenticator = Authenticator::new(config);
+
+        let result = authenticator.parse_jwt(&token).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn algorithm_validation_rejects_wrong_algorithm() {
+        use crate::web::auth::user::tests::Builder;
+        use crate::web::auth::{CLAIM_ISS, CLAIM_SUB};
+
+        // Token uses HS256 (default in Builder)
+        let token = Builder::new()
+            .with_string(CLAIM_ISS, "https://issuer.example.com")
+            .with_string(CLAIM_SUB, "user-123")
+            .into_token("shared-secret")
+            .unwrap();
+
+        // Config only allows RS256
+        let config = AuthenticatorConfig::new(
+            Some("shared-secret"),
+            "RS256",
+            "https://issuer.example.com",
+            "",
+            "en-US".to_string(),
+            None,
+        )
+        .unwrap();
+        let authenticator = Authenticator::new(config);
+
+        let result = authenticator.parse_jwt(&token).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn algorithm_validation_accepts_correct_algorithm() {
+        use crate::web::auth::user::tests::Builder;
+        use crate::web::auth::{CLAIM_ISS, CLAIM_SUB};
+
+        // Token uses HS256
+        let token = Builder::new()
+            .with_string(CLAIM_ISS, "https://issuer.example.com")
+            .with_string(CLAIM_SUB, "user-123")
+            .into_token("shared-secret")
+            .unwrap();
+
+        // Config allows HS256 and RS256
+        let config = AuthenticatorConfig::new(
+            Some("shared-secret"),
+            "HS256,RS256",
+            "https://issuer.example.com",
+            "",
+            "en-US".to_string(),
+            None,
+        )
+        .unwrap();
+        let authenticator = Authenticator::new(config);
+
+        let claims = authenticator.parse_jwt(&token).await.unwrap();
+        assert_eq!(claims.get(CLAIM_SUB).unwrap(), &json!("user-123"));
+    }
+
+    #[tokio::test]
+    async fn audience_validation_accepts_valid_audience() {
+        use crate::web::auth::user::tests::Builder;
+        use crate::web::auth::{CLAIM_AUD, CLAIM_ISS, CLAIM_SUB};
+
+        let token = Builder::new()
+            .with_string(CLAIM_ISS, "https://issuer.example.com")
+            .with_string(CLAIM_SUB, "user-123")
+            .with_string(CLAIM_AUD, "my-api")
+            .into_token("shared-secret")
+            .unwrap();
+
+        let config = AuthenticatorConfig::new(
+            Some("shared-secret"),
+            "",
+            "https://issuer.example.com",
+            "my-api,other-api",
+            "en-US".to_string(),
+            None,
+        )
+        .unwrap();
+        let authenticator = Authenticator::new(config);
+
+        let claims = authenticator.parse_jwt(&token).await.unwrap();
+        assert_eq!(claims.get(CLAIM_SUB).unwrap(), &json!("user-123"));
+    }
+
+    #[tokio::test]
+    async fn audience_validation_rejects_wrong_audience() {
+        use crate::web::auth::user::tests::Builder;
+        use crate::web::auth::{CLAIM_AUD, CLAIM_ISS, CLAIM_SUB};
+
+        let token = Builder::new()
+            .with_string(CLAIM_ISS, "https://issuer.example.com")
+            .with_string(CLAIM_SUB, "user-123")
+            .with_string(CLAIM_AUD, "wrong-api")
+            .into_token("shared-secret")
+            .unwrap();
+
+        let config = AuthenticatorConfig::new(
+            Some("shared-secret"),
+            "",
+            "https://issuer.example.com",
+            "my-api",
+            "en-US".to_string(),
+            None,
+        )
+        .unwrap();
+        let authenticator = Authenticator::new(config);
+
+        let result = authenticator.parse_jwt(&token).await;
+        assert!(result.is_err());
+    }
+
+    // Custom KeyFetcher tests (simulating JWKS)
+
+    struct MockKeyFetcher {
+        key: Arc<DecodingKey>,
+        expected_kid: Option<String>,
+    }
+
+    impl MockKeyFetcher {
+        fn new(secret: &[u8]) -> Self {
+            Self {
+                key: Arc::new(DecodingKey::from_secret(secret)),
+                expected_kid: None,
+            }
+        }
+
+        fn with_kid(mut self, kid: &str) -> Self {
+            self.expected_kid = Some(kid.to_string());
+            self
+        }
+    }
+
+    #[async_trait]
+    impl KeyFetcher for MockKeyFetcher {
+        async fn fetch(&self, header: &Header) -> anyhow::Result<Arc<DecodingKey>> {
+            if let Some(expected_kid) = &self.expected_kid {
+                if header.kid.as_ref() != Some(expected_kid) {
+                    anyhow::bail!(
+                        "Key ID mismatch: expected {}, got {:?}",
+                        expected_kid,
+                        header.kid
+                    );
+                }
+            }
+            Ok(self.key.clone())
+        }
+    }
+
+    #[tokio::test]
+    async fn custom_key_fetcher_validates_token() {
+        use crate::web::auth::user::tests::Builder;
+        use crate::web::auth::{CLAIM_ISS, CLAIM_SUB};
+
+        let issuer = "https://custom-idp.example.com";
+
+        // Create token signed with our "JWKS" secret
+        let token = Builder::new()
+            .with_string(CLAIM_ISS, issuer)
+            .with_string(CLAIM_SUB, "user-from-jwks")
+            .into_token("jwks-secret-key")
+            .unwrap();
+
+        // Create authenticator with mock key fetcher
+        let key_fetcher = Arc::new(MockKeyFetcher::new(b"jwks-secret-key"));
+        let config =
+            AuthenticatorConfig::with_custom_key_fetcher(issuer, key_fetcher, "en-US".to_string());
+        let authenticator = Authenticator::new(config);
+
+        let claims = authenticator.parse_jwt(&token).await.unwrap();
+        assert_eq!(claims.get(CLAIM_SUB).unwrap(), &json!("user-from-jwks"));
+    }
+
+    #[tokio::test]
+    async fn custom_key_fetcher_rejects_wrong_key() {
+        use crate::web::auth::user::tests::Builder;
+        use crate::web::auth::{CLAIM_ISS, CLAIM_SUB};
+
+        let issuer = "https://custom-idp.example.com";
+
+        // Create token signed with different secret
+        let token = Builder::new()
+            .with_string(CLAIM_ISS, issuer)
+            .with_string(CLAIM_SUB, "user-from-jwks")
+            .into_token("actual-secret")
+            .unwrap();
+
+        // Key fetcher returns different key
+        let key_fetcher = Arc::new(MockKeyFetcher::new(b"wrong-secret"));
+        let config =
+            AuthenticatorConfig::with_custom_key_fetcher(issuer, key_fetcher, "en-US".to_string());
+        let authenticator = Authenticator::new(config);
+
+        let result = authenticator.parse_jwt(&token).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn custom_key_fetcher_can_validate_kid() {
+        use crate::web::auth::{CLAIM_ISS, CLAIM_SUB};
+        use jsonwebtoken::{encode, EncodingKey};
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        let issuer = "https://custom-idp.example.com";
+
+        // Create token with kid in header
+        let mut header = Header::new(Algorithm::HS256);
+        header.kid = Some("key-123".to_string());
+
+        let exp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+            + 3600;
+
+        let mut claims = std::collections::HashMap::new();
+        claims.insert(CLAIM_ISS.to_string(), json!(issuer));
+        claims.insert(CLAIM_SUB.to_string(), json!("user-with-kid"));
+        claims.insert("exp".to_string(), json!(exp));
+
+        let token = encode(
+            &header,
+            &claims,
+            &EncodingKey::from_secret(b"jwks-secret"),
+        )
+        .unwrap();
+
+        // Key fetcher expects specific kid
+        let key_fetcher = Arc::new(MockKeyFetcher::new(b"jwks-secret").with_kid("key-123"));
+        let config =
+            AuthenticatorConfig::with_custom_key_fetcher(issuer, key_fetcher, "en-US".to_string());
+        let authenticator = Authenticator::new(config);
+
+        let claims = authenticator.parse_jwt(&token).await.unwrap();
+        assert_eq!(claims.get(CLAIM_SUB).unwrap(), &json!("user-with-kid"));
+    }
+
+    #[tokio::test]
+    async fn custom_key_fetcher_rejects_wrong_kid() {
+        use crate::web::auth::{CLAIM_ISS, CLAIM_SUB};
+        use jsonwebtoken::{encode, EncodingKey};
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        let issuer = "https://custom-idp.example.com";
+
+        // Create token with kid in header
+        let mut header = Header::new(Algorithm::HS256);
+        header.kid = Some("wrong-key-id".to_string());
+
+        let exp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+            + 3600;
+
+        let mut claims = std::collections::HashMap::new();
+        claims.insert(CLAIM_ISS.to_string(), json!(issuer));
+        claims.insert(CLAIM_SUB.to_string(), json!("user-with-kid"));
+        claims.insert("exp".to_string(), json!(exp));
+
+        let token = encode(
+            &header,
+            &claims,
+            &EncodingKey::from_secret(b"jwks-secret"),
+        )
+        .unwrap();
+
+        // Key fetcher expects different kid
+        let key_fetcher = Arc::new(MockKeyFetcher::new(b"jwks-secret").with_kid("expected-key-id"));
+        let config =
+            AuthenticatorConfig::with_custom_key_fetcher(issuer, key_fetcher, "en-US".to_string());
+        let authenticator = Authenticator::new(config);
+
+        let result = authenticator.parse_jwt(&token).await;
+        assert!(result.is_err());
+        assert!(result.err().unwrap().to_string().contains("Key ID mismatch"));
+    }
+
+    // Expiration tests
+
+    #[tokio::test]
+    async fn parse_jwt_rejects_expired_token() {
+        use crate::web::auth::user::tests::Builder;
+        use crate::web::auth::CLAIM_SUB;
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        // Create token that expired 1 hour ago
+        let expired_exp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+            - 3600;
+
+        let token = Builder::new()
+            .with_string(CLAIM_SUB, "user-123")
+            .with_value("exp", json!(expired_exp))
+            .into_token("test-secret")
+            .unwrap();
+
+        let authenticator = Authenticator::with_simple_secret("test-secret");
+        let result = authenticator.parse_jwt(&token).await;
+
+        assert!(result.is_err());
+        let err_msg = format!("{:?}", result.unwrap_err());
+        assert!(
+            err_msg.contains("exp") || err_msg.contains("Expired"),
+            "Expected error about expiration, got: {}",
+            err_msg
+        );
+    }
+
+    #[tokio::test]
+    async fn parse_jwt_accepts_token_not_yet_expired() {
+        use crate::web::auth::user::tests::Builder;
+        use crate::web::auth::CLAIM_SUB;
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        // Create token that expires in 1 hour
+        let future_exp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+            + 3600;
+
+        let token = Builder::new()
+            .with_string(CLAIM_SUB, "user-123")
+            .with_value("exp", json!(future_exp))
+            .into_token("test-secret")
+            .unwrap();
+
+        let authenticator = Authenticator::with_simple_secret("test-secret");
+        let claims = authenticator.parse_jwt(&token).await.unwrap();
+
+        assert_eq!(claims.get(CLAIM_SUB).unwrap(), &json!("user-123"));
     }
 }

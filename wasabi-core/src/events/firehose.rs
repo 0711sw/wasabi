@@ -25,7 +25,7 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 
 /// Regex for normalizing names to lowercase alphanumeric with underscores.
-const NON_CHARS: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"[^a-z0-9]+").unwrap());
+static NON_CHARS: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"[^a-z0-9]+").unwrap());
 
 /// Channel capacity - provides backpressure if Firehose can't keep up.
 const EVENT_BUFFER_SIZE: usize = 8192;
@@ -122,25 +122,24 @@ async fn run_background_loop(client: &Client, stream: &str, mut rx: mpsc::Receiv
             Some(event) = rx.recv() => {
                 buffer.push(event);
                 if buffer.len() >= AUTOMATIC_FLUSH_SIZE {
-                    flush_batch(&client, &stream, &mut buffer).await;
+                    flush_batch(client, stream, &mut buffer).await;
                 }
             },
             _ = interval.tick() => {
-                    flush_batch(&client,&stream, &mut buffer).await;
+                    flush_batch(client, stream, &mut buffer).await;
             }
         }
     }
 
     // Channel closed, flush remaining events...
-    flush_batch(&client, &stream, &mut buffer).await;
+    flush_batch(client, stream, &mut buffer).await;
 }
 
 #[tracing::instrument(level = "debug", skip(client, buffer))]
 async fn flush_batch(client: &Client, stream: &str, buffer: &mut Vec<String>) {
     let records = buffer
         .drain(..)
-        .map(|json| Record::builder().data(json.into_bytes().into()).build())
-        .flatten()
+        .flat_map(|json| Record::builder().data(json.into_bytes().into()).build())
         .collect::<Vec<_>>();
 
     for chunk in records.chunks(MAX_EVENTS_PER_UPLOAD) {

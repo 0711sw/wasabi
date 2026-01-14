@@ -63,7 +63,7 @@ impl OpenSearchClient {
 
         let mut builder = TransportBuilder::new(conn_pool);
 
-        if user.len() > 0 {
+        if !user.is_empty() {
             builder = builder.auth(Credentials::Basic(user, pass));
         }
 

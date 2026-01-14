@@ -432,7 +432,7 @@ mod open_telemetry {
         let extractor = HeaderExtractor { headers };
         let parent_cx =
             opentelemetry::global::get_text_map_propagator(|prop| prop.extract(&extractor));
-        span.set_parent(parent_cx);
+        let _ = span.set_parent(parent_cx);
     }
 }
 
