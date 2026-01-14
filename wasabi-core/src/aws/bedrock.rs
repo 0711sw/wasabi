@@ -19,12 +19,18 @@ use warp::sse::Event;
 
 /// Events emitted by Bedrock model responses.
 pub enum ModelEvent {
+    /// A text chunk from the model's response.
     Text(String),
+    /// A tool/function call request from the model.
     ToolUse(ToolUse),
+    /// Token usage metadata at the end of the response.
     Metadata {
+        /// Number of tokens in the input prompt.
         input_tokens: i32,
+        /// Number of tokens in the model's response.
         output_tokens: i32,
     },
+    /// Stream completion signal.
     Done,
 }
 

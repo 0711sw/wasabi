@@ -246,7 +246,8 @@ impl S3Client {
                 &location_constraint
             );
 
-            self.client
+            let _ = self
+                .client
                 .create_bucket()
                 .bucket(effective_name.clone())
                 .create_bucket_configuration(
@@ -301,7 +302,8 @@ impl S3Client {
     ) -> anyhow::Result<()> {
         let effective_bucket = self.effective_name(bucket);
 
-        self.client
+        let _ = self
+            .client
             .put_object()
             .bucket(effective_bucket)
             .key(object_key)
@@ -481,7 +483,8 @@ impl S3Client {
             );
         }
 
-        self.client
+        let _ = self
+            .client
             .complete_multipart_upload()
             .bucket(effective_bucket)
             .key(key)

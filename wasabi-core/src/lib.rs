@@ -112,6 +112,17 @@
 //! | `RUST_LOG` | Console log filter (e.g., `info`, `myapp=debug`) | `info` |
 //! | `RUST_TRACE` | OpenTelemetry trace filter | `debug` |
 //! | `OTEL_EXPORTER_OTLP_ENDPOINT` | OpenTelemetry OTLP endpoint | (required for OTel) |
+#![deny(
+    warnings,
+    missing_docs,
+    trivial_casts,
+    trivial_numeric_casts,
+    unused_extern_crates,
+    unused_import_braces,
+    unused_results
+)]
+// Relax some lints for test code
+#![cfg_attr(test, allow(unused_results, dead_code, unused_imports, missing_docs))]
 
 use std::env;
 use std::sync::LazyLock;

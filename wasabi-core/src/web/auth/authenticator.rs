@@ -9,11 +9,11 @@ use crate::web::auth::jwks::{JwksCache, UrlJwksFetcher};
 use crate::web::auth::user::ClaimsSet;
 use crate::web::auth::{CLAIM_ISS, CLAIM_LOCALE, DEFAULT_LOCALE};
 use crate::web::error::ResultExt;
-use anyhow::{bail, Context};
+use anyhow::{Context, bail};
 use async_trait::async_trait;
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
-use jsonwebtoken::{decode, decode_header, Algorithm, DecodingKey, Header, Validation};
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use jsonwebtoken::{Algorithm, DecodingKey, Header, Validation, decode, decode_header};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::env;
@@ -27,6 +27,7 @@ use warp::http::StatusCode;
 /// use different identity providers.
 #[async_trait]
 pub trait ConfigFetcher: Send + Sync {
+    /// Returns authenticator config for the given claims, or `None` if not applicable.
     async fn fetch(&self, claims: &ClaimsSet) -> Option<Arc<AuthenticatorConfig>>;
 }
 
@@ -151,7 +152,7 @@ impl Authenticator {
 
     fn inject_locale_if_missing(claims: &mut ClaimsSet, default_locale: &str) {
         if claims.get(CLAIM_LOCALE).is_none() {
-            claims.insert(
+            let _ = claims.insert(
                 CLAIM_LOCALE.to_string(),
                 Value::String(default_locale.to_string()),
             );
@@ -177,6 +178,7 @@ enum KeyFetchStrategy {
 /// Trait for fetching JWT decoding keys.
 #[async_trait]
 pub trait KeyFetcher: Send + Sync {
+    /// Fetches the decoding key for the given JWT header.
     async fn fetch(&self, header: &Header) -> anyhow::Result<Arc<DecodingKey>>;
 }
 
@@ -331,7 +333,7 @@ impl AuthenticatorConfig {
 
             for (iss, config) in issuers {
                 let fetcher = Self::create_key_fetcher_from_config(&iss, config, &hmac_key)?;
-                config_per_issuer.insert(iss, fetcher);
+                let _ = config_per_issuer.insert(iss, fetcher);
             }
 
             Ok(KeyFetchStrategy::PerIssuer(config_per_issuer))
@@ -676,8 +678,8 @@ mod tests {
 
     #[tokio::test]
     async fn parse_jwt_injects_default_locale() {
-        use crate::web::auth::user::tests::Builder;
         use crate::web::auth::CLAIM_SUB;
+        use crate::web::auth::user::tests::Builder;
 
         let token = Builder::new()
             .with_string(CLAIM_SUB, "user-123")
@@ -692,8 +694,8 @@ mod tests {
 
     #[tokio::test]
     async fn parse_jwt_fails_with_wrong_secret() {
-        use crate::web::auth::user::tests::Builder;
         use crate::web::auth::CLAIM_SUB;
+        use crate::web::auth::user::tests::Builder;
 
         let token = Builder::new()
             .with_string(CLAIM_SUB, "user-123")
@@ -833,15 +835,8 @@ mod tests {
 
         // Fetcher returns config with wrong secret
         let fetcher_config = Arc::new(
-            AuthenticatorConfig::new(
-                Some("wrong-secret"),
-                "",
-                "",
-                "",
-                "de-DE".to_string(),
-                None,
-            )
-            .unwrap(),
+            AuthenticatorConfig::new(Some("wrong-secret"), "", "", "", "de-DE".to_string(), None)
+                .unwrap(),
         );
         authenticator.add_fetcher(Box::new(TestConfigFetcher {
             config: fetcher_config,
@@ -1194,7 +1189,7 @@ mod tests {
     #[tokio::test]
     async fn custom_key_fetcher_can_validate_kid() {
         use crate::web::auth::{CLAIM_ISS, CLAIM_SUB};
-        use jsonwebtoken::{encode, EncodingKey};
+        use jsonwebtoken::{EncodingKey, encode};
         use std::time::{SystemTime, UNIX_EPOCH};
 
         let issuer = "https://custom-idp.example.com";
@@ -1214,12 +1209,7 @@ mod tests {
         claims.insert(CLAIM_SUB.to_string(), json!("user-with-kid"));
         claims.insert("exp".to_string(), json!(exp));
 
-        let token = encode(
-            &header,
-            &claims,
-            &EncodingKey::from_secret(b"jwks-secret"),
-        )
-        .unwrap();
+        let token = encode(&header, &claims, &EncodingKey::from_secret(b"jwks-secret")).unwrap();
 
         // Key fetcher expects specific kid
         let key_fetcher = Arc::new(MockKeyFetcher::new(b"jwks-secret").with_kid("key-123"));
@@ -1234,7 +1224,7 @@ mod tests {
     #[tokio::test]
     async fn custom_key_fetcher_rejects_wrong_kid() {
         use crate::web::auth::{CLAIM_ISS, CLAIM_SUB};
-        use jsonwebtoken::{encode, EncodingKey};
+        use jsonwebtoken::{EncodingKey, encode};
         use std::time::{SystemTime, UNIX_EPOCH};
 
         let issuer = "https://custom-idp.example.com";
@@ -1254,12 +1244,7 @@ mod tests {
         claims.insert(CLAIM_SUB.to_string(), json!("user-with-kid"));
         claims.insert("exp".to_string(), json!(exp));
 
-        let token = encode(
-            &header,
-            &claims,
-            &EncodingKey::from_secret(b"jwks-secret"),
-        )
-        .unwrap();
+        let token = encode(&header, &claims, &EncodingKey::from_secret(b"jwks-secret")).unwrap();
 
         // Key fetcher expects different kid
         let key_fetcher = Arc::new(MockKeyFetcher::new(b"jwks-secret").with_kid("expected-key-id"));
@@ -1269,15 +1254,21 @@ mod tests {
 
         let result = authenticator.parse_jwt(&token).await;
         assert!(result.is_err());
-        assert!(result.err().unwrap().to_string().contains("Key ID mismatch"));
+        assert!(
+            result
+                .err()
+                .unwrap()
+                .to_string()
+                .contains("Key ID mismatch")
+        );
     }
 
     // Expiration tests
 
     #[tokio::test]
     async fn parse_jwt_rejects_expired_token() {
-        use crate::web::auth::user::tests::Builder;
         use crate::web::auth::CLAIM_SUB;
+        use crate::web::auth::user::tests::Builder;
         use std::time::{SystemTime, UNIX_EPOCH};
 
         // Create token that expired 1 hour ago
@@ -1307,8 +1298,8 @@ mod tests {
 
     #[tokio::test]
     async fn parse_jwt_accepts_token_not_yet_expired() {
-        use crate::web::auth::user::tests::Builder;
         use crate::web::auth::CLAIM_SUB;
+        use crate::web::auth::user::tests::Builder;
         use std::time::{SystemTime, UNIX_EPOCH};
 
         // Create token that expires in 1 hour

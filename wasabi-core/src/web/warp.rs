@@ -131,7 +131,8 @@ async fn as_stream(
         client_bail!("The given request data is too large");
     }
 
-    Ok(Box::pin(stream.map_ok(buf_to_bytes)) as PinnedBytesStream)
+    let pinned: PinnedBytesStream = Box::pin(stream.map_ok(buf_to_bytes));
+    Ok(pinned)
 }
 
 /// Reads a byte stream into a pre-allocated buffer.
@@ -253,7 +254,8 @@ pub fn into_response_with_status<S: Serialize>(
         Ok((status, data)) => {
             let mut res = Response::new(data.into());
             *res.status_mut() = status;
-            res.headers_mut()
+            let _ = res
+                .headers_mut()
                 .insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
             Ok(res)
         }
@@ -375,7 +377,7 @@ where
         let fut = async move {
             let response = inner.call(req).await?;
             let status = response.status().as_u16();
-            Span::current().record("http.status_code", status as i64);
+            let _ = Span::current().record("http.status_code", status as i64);
             Ok(response)
         }
         .instrument(span);
@@ -441,8 +443,8 @@ mod tests {
     use super::*;
     use crate::web::error::ApiError;
     use bytes::Bytes;
-    use futures_util::stream;
     use futures_util::StreamExt;
+    use futures_util::stream;
     use std::str::FromStr;
 
     // as_size_limited_stream tests

@@ -18,11 +18,16 @@ use std::fmt;
 /// A string that can hold translations for multiple languages.
 #[derive(Debug, Clone, Default)]
 pub enum I18nString {
+    /// No value set.
     #[default]
     Empty,
+    /// A single string value used for all languages.
     Simple(String),
+    /// Multiple translations keyed by language code.
     Translations {
+        /// The default/fallback translation (language code "xx").
         standard: Option<String>,
+        /// Translations keyed by language code (e.g., "de", "fr").
         translations: HashMap<String, String>,
     },
 }
@@ -134,7 +139,7 @@ impl<'de> Visitor<'de> for I18nStringVisitor {
             if key == DEFAULT_LANGUAGE {
                 standard = Some(value);
             } else if !value.is_empty() {
-                translations.insert(key, value);
+                let _ = translations.insert(key, value);
             }
         }
 

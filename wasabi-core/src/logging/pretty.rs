@@ -82,21 +82,21 @@ impl PrettyConsoleLogFormat {
             if event.metadata().is_span()
                 && let Some(span) = scope.next()
             {
-                    styled!(writer, Style::new().fg(Color::Magenta), {
-                        write!(writer, "=> ")?;
-                    });
+                styled!(writer, Style::new().fg(Color::Magenta), {
+                    write!(writer, "=> ")?;
+                });
 
-                    Self::format_target(writer, event)?;
-                    write!(writer, "{}", span.name())?;
+                Self::format_target(writer, event)?;
+                write!(writer, "{}", span.name())?;
 
-                    let ext = span.extensions();
-                    let fields = &ext
-                        .get::<FormattedFields<N>>()
-                        .expect("will never be `None`");
+                let ext = span.extensions();
+                let fields = &ext
+                    .get::<FormattedFields<N>>()
+                    .expect("will never be `None`");
 
-                    if !fields.is_empty() {
-                        write!(writer, "{{{}}}", fields)?;
-                    }
+                if !fields.is_empty() {
+                    write!(writer, "{{{}}}", fields)?;
+                }
             }
         } else {
             Self::format_target(writer, event)?;

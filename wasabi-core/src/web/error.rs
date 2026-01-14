@@ -15,8 +15,10 @@ use warp::reject::Reject;
 #[derive(Clone, Serialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct ApiError {
+    /// HTTP status code for the response (not serialized).
     #[serde(skip)]
     pub status: StatusCode,
+    /// Human-readable error message.
     pub message: String,
 }
 

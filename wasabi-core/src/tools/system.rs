@@ -15,7 +15,7 @@ static RUNNING: AtomicBool = AtomicBool::new(true);
 /// Once any of SIGINT, SIGTERM, or SIGHUP is received, the global running
 /// flag is set to false. Call this once at application startup.
 pub fn install_termination_listener() {
-    tokio::spawn({
+    drop(tokio::spawn({
         async move {
             let mut sig_term = signal(SignalKind::terminate()).ok();
             let mut sig_int = signal(SignalKind::interrupt()).ok();
@@ -36,7 +36,7 @@ pub fn install_termination_listener() {
                 },
             }
         }
-    });
+    }));
 }
 
 /// Returns `true` if the application should continue running.

@@ -98,9 +98,9 @@ impl FirehoseEventRecorder {
         );
 
         let (tx, rx) = mpsc::channel::<String>(EVENT_BUFFER_SIZE);
-        tokio::spawn(async move {
+        drop(tokio::spawn(async move {
             run_background_loop(&client, &stream, rx).await;
-        });
+        }));
 
         Ok(Self { system, tx })
     }

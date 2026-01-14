@@ -129,7 +129,7 @@ impl DynamoClient {
             Ok(())
         } else {
             tracing::info!("Table '{}' does not exist. Creating...", effective_name);
-            callback(self.client.create_table().table_name(&effective_name))
+            let _ = callback(self.client.create_table().table_name(&effective_name))
                 .with_context(|| {
                     format!(
                         "Faild to build proper create table request for: {}",
@@ -250,7 +250,8 @@ impl ItemBuilder {
 
     /// Adds a string attribute to the item.
     pub fn add_str(&mut self, key: impl Into<String>, value: impl Into<String>) {
-        self.item
+        let _ = self
+            .item
             .insert(key.into(), AttributeValue::S(value.into()));
     }
 

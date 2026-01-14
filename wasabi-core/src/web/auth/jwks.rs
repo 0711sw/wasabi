@@ -197,7 +197,13 @@ mod tests {
         let result = cache.fetch_key("unknown-key").await;
 
         assert!(result.is_err());
-        assert!(result.err().unwrap().to_string().contains("Unknown JWKS key"));
+        assert!(
+            result
+                .err()
+                .unwrap()
+                .to_string()
+                .contains("Unknown JWKS key")
+        );
     }
 
     #[tokio::test]
