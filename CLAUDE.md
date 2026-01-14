@@ -9,6 +9,8 @@ Wasabi is a lightweight Rust microservices framework for containerized deploymen
 - **wasabi-core** - Core framework functionality
 - **wasabi-macro** - Procedural macros (Event derive)
 
+Project language (code, commit messages, documentation) is english.
+
 ## Build Commands
 
 ```bash
@@ -62,8 +64,6 @@ All features are opt-in. Enable as needed:
 - `EventRecorder` trait with Firehose implementation
 
 ## Key Patterns
-
-**Authentication**: Uses `ConfigFetcher` trait to determine auth method per issuer. Claims extracted with configurable prefix support.
 
 **Error Handling**: Chain context with `anyhow::Context`, convert to `ApiError` via `ResultExt::map_err_to_http()`.
 
