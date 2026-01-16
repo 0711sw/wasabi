@@ -43,7 +43,7 @@ fn create_github_oidc_config(claim_transformer: Option<ClaimTransformer>) -> Aut
     AuthenticatorConfig::new(
         Some("RS256"),
         [GITHUB_OIDC_ISSUER.to_owned()].into(),
-        None,
+        env::var("AUTH_AUDIENCE").ok().as_deref(),
         DEFAULT_LOCALE.to_string(),
         None,
         Arc::new(JwksFetcher::new(jwks_url)),
