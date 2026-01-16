@@ -135,7 +135,9 @@ wasabi::logging::setup_tracing();  // Reads RUST_LOG, RUST_TRACE env vars
 | `AUTH_ISSUER` | Allowed issuers (see syntax below) |
 | `AUTH_AUDIENCE` | Comma-separated allowed audiences |
 | `AUTH_CUSTOM_CLAIM_PREFIX` | Prefix to strip from custom claims |
-| `DEFAULT_LOCALE` | Default locale for requests | `en` |
+| `DEFAULT_LOCALE` | Default locale for requests |
+| `GITHUB_OIDC_ALLOWED_REPOS` | Regex for allowed GitHub repos (e.g., `myorg/.*`) |
+| `GITHUB_OIDC_CLAIM_MAPPING` | Claim transformation rules (e.g., `tenant=ci,permissions=[deploy]`) |
 
 **`AUTH_ISSUER` syntax:**
 

@@ -14,6 +14,8 @@ use warp::http::StatusCode;
 use warp::{Filter, Rejection};
 
 pub mod authenticator;
+pub mod claim_transformer;
+pub mod github_oidc;
 pub mod user;
 
 mod jwks;

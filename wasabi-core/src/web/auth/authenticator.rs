@@ -5,6 +5,7 @@
 //! stripped to normalize claims from different identity providers.
 
 use crate::status_bail;
+use crate::web::auth::claim_transformer::ClaimTransformer;
 use crate::web::auth::jwks::{JwksCache, UrlJwksFetcher};
 use crate::web::auth::user::ClaimsSet;
 use crate::web::auth::{CLAIM_ISS, CLAIM_LOCALE, DEFAULT_LOCALE};
@@ -48,10 +49,16 @@ impl Authenticator {
 
     #[cfg(test)]
     pub fn with_simple_secret(secret: &str) -> Self {
-        Self::new(
-            AuthenticatorConfig::new(Some(secret), "", "", "", DEFAULT_LOCALE.to_string(), None)
-                .unwrap(),
-        )
+        let key = Arc::new(DecodingKey::from_secret(secret.as_bytes()));
+        Self::new(AuthenticatorConfig::new(
+            None,
+            HashSet::new(),
+            None,
+            DEFAULT_LOCALE.to_string(),
+            None,
+            Arc::new(HmacKeyFetcher::new(key)),
+            None,
+        ))
     }
 
     /// Creates an authenticator from environment variables.
@@ -64,7 +71,7 @@ impl Authenticator {
     /// - `DEFAULT_LOCALE` - Fallback locale if not in token
     /// - `AUTH_CUSTOM_CLAIM_PREFIX` - Prefix to strip from custom claims
     pub fn from_env() -> anyhow::Result<Self> {
-        let config = AuthenticatorConfig::new(
+        let config = AuthenticatorConfig::from_env_style_config(
             env::var("AUTH_SECRET").ok(),
             &env::var("AUTH_ALGORITHMS").ok().unwrap_or_default(),
             &env::var("AUTH_ISSUER").ok().unwrap_or_default(),
@@ -121,6 +128,10 @@ impl Authenticator {
             claims = Self::translate_claims(claims, custom_claim_prefix);
         }
 
+        if let Some(transformer) = &config.claim_transformer {
+            transformer.apply(&mut claims);
+        }
+
         Self::inject_locale_if_missing(&mut claims, &config.default_locale);
 
         Ok(claims)
@@ -166,6 +177,7 @@ pub struct AuthenticatorConfig {
     default_locale: String,
     custom_claim_prefix: Option<String>,
     key_fetcher: KeyFetchStrategy,
+    claim_transformer: Option<ClaimTransformer>,
 }
 
 /// Strategy for fetching decoding keys - either a single key for all issuers
@@ -176,17 +188,35 @@ enum KeyFetchStrategy {
 }
 
 /// Trait for fetching JWT decoding keys.
+///
+/// Implement this trait to support custom key sources (e.g., custom JWKS endpoints,
+/// key vaults, or other key management systems).
 #[async_trait]
 pub trait KeyFetcher: Send + Sync {
     /// Fetches the decoding key for the given JWT header.
     async fn fetch(&self, header: &Header) -> anyhow::Result<Arc<DecodingKey>>;
 }
 
-struct HmacKeyFetcher {
+/// Key fetcher for HMAC-based (shared secret) JWT validation.
+///
+/// Use this when validating JWTs signed with a symmetric secret key (HS256, HS384, HS512).
+///
+/// # Example
+///
+/// ```
+/// use wasabi_core::web::auth::authenticator::HmacKeyFetcher;
+/// use jsonwebtoken::DecodingKey;
+/// use std::sync::Arc;
+///
+/// let key = Arc::new(DecodingKey::from_secret(b"my-secret-key"));
+/// let fetcher = HmacKeyFetcher::new(key);
+/// ```
+pub struct HmacKeyFetcher {
     hmac_key: Arc<DecodingKey>,
 }
 
 impl HmacKeyFetcher {
+    /// Creates a new HMAC key fetcher with the given decoding key.
     pub fn new(hmac_key: Arc<DecodingKey>) -> Self {
         Self { hmac_key }
     }
@@ -199,11 +229,25 @@ impl KeyFetcher for HmacKeyFetcher {
     }
 }
 
-struct JwksFetcher {
+/// Key fetcher for JWKS (JSON Web Key Set) based JWT validation.
+///
+/// Fetches public keys from a JWKS endpoint for validating JWTs signed with
+/// asymmetric algorithms (RS256, ES256, etc.). Keys are cached and refreshed
+/// automatically.
+///
+/// # Example
+///
+/// ```
+/// use wasabi_core::web::auth::authenticator::JwksFetcher;
+///
+/// let fetcher = JwksFetcher::new("https://example.com/.well-known/jwks.json".to_string());
+/// ```
+pub struct JwksFetcher {
     jwks_cache: JwksCache,
 }
 
 impl JwksFetcher {
+    /// Creates a new JWKS fetcher for the given URL.
     pub fn new(jwks_url: String) -> Self {
         Self {
             jwks_cache: JwksCache::new(Box::new(UrlJwksFetcher::new(jwks_url))),
@@ -223,31 +267,68 @@ impl KeyFetcher for JwksFetcher {
 }
 
 impl AuthenticatorConfig {
-    /// Creates a test configuration with a custom key fetcher for a given issuer.
-    #[cfg(test)]
-    pub(crate) fn with_custom_key_fetcher(
-        issuer: &str,
-        key_fetcher: Arc<dyn KeyFetcher>,
+    /// Creates a new authenticator configuration.
+    ///
+    /// # Arguments
+    ///
+    /// * `algorithms` - Allowed JWT algorithms (e.g., `Some("RS256,ES256")`). `None` allows any algorithm.
+    /// * `issuers` - Set of allowed token issuers.
+    /// * `audience` - Expected audience claim. `None` skips audience validation.
+    /// * `default_locale` - Fallback locale if not present in token.
+    /// * `custom_claim_prefix` - Prefix to strip from custom claims (e.g., `"custom:"`).
+    /// * `key_fetcher` - Strategy for fetching decoding keys.
+    /// * `claim_transformer` - Optional transformation rules for claims.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use wasabi_core::web::auth::authenticator::{AuthenticatorConfig, JwksFetcher};
+    /// use std::sync::Arc;
+    ///
+    /// let config = AuthenticatorConfig::new(
+    ///     Some("RS256"),
+    ///     ["https://token.actions.githubusercontent.com".to_string()].into(),
+    ///     None,
+    ///     "en-US".to_string(),
+    ///     None,
+    ///     Arc::new(JwksFetcher::new("https://token.actions.githubusercontent.com/.well-known/jwks".to_string())),
+    ///     None,
+    /// );
+    /// ```
+    pub fn new(
+        algorithms: Option<&str>,
+        issuers: HashSet<String>,
+        audience: Option<&str>,
         default_locale: String,
+        custom_claim_prefix: Option<String>,
+        key_fetcher: Arc<dyn KeyFetcher>,
+        claim_transformer: Option<ClaimTransformer>,
     ) -> Self {
-        let mut issuers = HashMap::new();
-        issuers.insert(issuer.to_owned(), String::new());
-
-        let mut fetcher_map = HashMap::new();
-        fetcher_map.insert(issuer.to_owned(), key_fetcher);
+        let validation = Self::build_validation(algorithms, &issuers, audience);
 
         AuthenticatorConfig {
-            validation: Self::build_validation("", &issuers, ""),
+            validation,
             default_locale,
-            custom_claim_prefix: None,
-            key_fetcher: KeyFetchStrategy::PerIssuer(fetcher_map),
+            custom_claim_prefix,
+            key_fetcher: KeyFetchStrategy::Static(key_fetcher),
+            claim_transformer,
         }
     }
 
-    /// Creates a new authenticator configuration.
+    /// Creates an authenticator configuration from environment-style string parameters.
     ///
-    /// Issuers can include per-issuer config: `issuer=jwks:/path` or `issuer=secret`.
-    pub fn new(
+    /// This is a convenience constructor that parses comma-separated issuers with optional
+    /// per-issuer configuration (e.g., `issuer1,issuer2=jwks:/.well-known/jwks.json`).
+    ///
+    /// # Arguments
+    ///
+    /// * `shared_secret` - HMAC secret for issuers using symmetric signing.
+    /// * `algorithms` - Comma-separated allowed algorithms (empty string allows any).
+    /// * `issuer` - Comma-separated issuers, optionally with config: `iss=jwks:/path` or `iss=secret`.
+    /// * `audience` - Expected audience (empty string skips validation).
+    /// * `default_locale` - Fallback locale.
+    /// * `custom_claim_prefix` - Prefix to strip from custom claims.
+    pub fn from_env_style_config(
         shared_secret: Option<impl AsRef<str>>,
         algorithms: &str,
         issuer: &str,
@@ -257,12 +338,17 @@ impl AuthenticatorConfig {
     ) -> anyhow::Result<Self> {
         let hmac_based_key =
             shared_secret.map(|str| Arc::new(DecodingKey::from_secret(str.as_ref().as_bytes())));
-        let issuers = issuer
-            .split(",")
+        let issuers: HashMap<String, String> = issuer
+            .split(',')
             .map(|iss| iss.split_once('=').unwrap_or((iss, "")))
             .map(|(iss, config)| (iss.to_owned(), config.to_owned()))
             .collect();
-        let validation = Self::build_validation(algorithms, &issuers, audience);
+        let issuer_names: HashSet<String> = issuers.keys().cloned().collect();
+        let validation = Self::build_validation(
+            Self::non_empty(algorithms),
+            &issuer_names,
+            Self::non_empty(audience),
+        );
         let key_fetcher = Self::build_key_fetcher_strategy(issuers, hmac_based_key)?;
 
         Ok(AuthenticatorConfig {
@@ -270,20 +356,25 @@ impl AuthenticatorConfig {
             default_locale,
             custom_claim_prefix,
             key_fetcher,
+            claim_transformer: None,
         })
     }
 
+    fn non_empty(s: &str) -> Option<&str> {
+        if s.is_empty() { None } else { Some(s) }
+    }
+
     fn build_validation(
-        algorithms: &str,
-        issuers: &HashMap<String, String>,
-        audience: &str,
+        algorithms: Option<&str>,
+        issuers: &HashSet<String>,
+        audience: Option<&str>,
     ) -> Validation {
         let mut validation = Validation::default();
 
         validation.validate_nbf = true;
-        validation.algorithms = Self::parse_algorithms(algorithms);
-        validation.iss = Some(issuers.keys().map(String::to_owned).collect());
-        validation.aud = Self::parse_set(audience);
+        validation.algorithms = algorithms.map(Self::parse_algorithms).unwrap_or_default();
+        validation.iss = Some(issuers.iter().cloned().collect());
+        validation.aud = audience.and_then(Self::parse_set);
 
         // If we chose to leave the required audiences empty, we skip validation entirely as
         // otherwise, the JWT library will always report an error even if no audience is given and
@@ -585,11 +676,11 @@ mod tests {
         assert!(algs.is_empty());
     }
 
-    // AuthenticatorConfig::new tests
+    // AuthenticatorConfig::from_env_style_config tests
 
     #[test]
     fn config_new_requires_secret_when_no_jwks() {
-        let result = AuthenticatorConfig::new(
+        let result = AuthenticatorConfig::from_env_style_config(
             None::<&str>,
             "",
             "https://issuer.example.com",
@@ -603,7 +694,7 @@ mod tests {
 
     #[test]
     fn config_new_succeeds_with_secret() {
-        let result = AuthenticatorConfig::new(
+        let result = AuthenticatorConfig::from_env_style_config(
             Some("my-secret"),
             "HS256",
             "https://issuer.example.com",
@@ -616,7 +707,7 @@ mod tests {
 
     #[test]
     fn config_new_fails_on_invalid_issuer_config() {
-        let result = AuthenticatorConfig::new(
+        let result = AuthenticatorConfig::from_env_style_config(
             Some("my-secret"),
             "",
             "https://issuer.example.com=invalid:config",
@@ -630,7 +721,7 @@ mod tests {
 
     #[test]
     fn config_new_accepts_jwks_config() {
-        let result = AuthenticatorConfig::new(
+        let result = AuthenticatorConfig::from_env_style_config(
             None::<&str>,
             "",
             "https://issuer.example.com=jwks:/.well-known/jwks.json",
@@ -643,7 +734,7 @@ mod tests {
 
     #[test]
     fn config_new_accepts_mixed_issuer_configs() {
-        let result = AuthenticatorConfig::new(
+        let result = AuthenticatorConfig::from_env_style_config(
             Some("my-secret"),
             "",
             "https://iss1.example.com=secret,https://iss2.example.com=jwks:/jwks.json",
@@ -757,7 +848,7 @@ mod tests {
 
         // Add fetcher that returns config with "fetcher-secret" for special-tenant
         let fetcher_config = Arc::new(
-            AuthenticatorConfig::new(
+            AuthenticatorConfig::from_env_style_config(
                 Some("fetcher-secret"),
                 "",
                 "",
@@ -796,7 +887,7 @@ mod tests {
 
         // Add fetcher that only matches "special-tenant"
         let fetcher_config = Arc::new(
-            AuthenticatorConfig::new(
+            AuthenticatorConfig::from_env_style_config(
                 Some("fetcher-secret"),
                 "",
                 "",
@@ -835,8 +926,15 @@ mod tests {
 
         // Fetcher returns config with wrong secret
         let fetcher_config = Arc::new(
-            AuthenticatorConfig::new(Some("wrong-secret"), "", "", "", "de-DE".to_string(), None)
-                .unwrap(),
+            AuthenticatorConfig::from_env_style_config(
+                Some("wrong-secret"),
+                "",
+                "",
+                "",
+                "de-DE".to_string(),
+                None,
+            )
+            .unwrap(),
         );
         authenticator.add_fetcher(Box::new(TestConfigFetcher {
             config: fetcher_config,
@@ -862,7 +960,7 @@ mod tests {
             .into_token("shared-secret")
             .unwrap();
 
-        let config = AuthenticatorConfig::new(
+        let config = AuthenticatorConfig::from_env_style_config(
             Some("shared-secret"),
             "",
             "https://issuer1.example.com,https://issuer2.example.com",
@@ -892,7 +990,7 @@ mod tests {
             .into_token("shared-secret")
             .unwrap();
 
-        let config = AuthenticatorConfig::new(
+        let config = AuthenticatorConfig::from_env_style_config(
             Some("shared-secret"),
             "",
             "https://issuer1.example.com,https://issuer2.example.com",
@@ -918,7 +1016,7 @@ mod tests {
             .into_token("shared-secret")
             .unwrap();
 
-        let config = AuthenticatorConfig::new(
+        let config = AuthenticatorConfig::from_env_style_config(
             Some("shared-secret"),
             "",
             "https://issuer1.example.com,https://issuer2.example.com",
@@ -949,7 +1047,7 @@ mod tests {
             .unwrap();
 
         // Mixed config: one issuer uses secret, another uses jwks
-        let config = AuthenticatorConfig::new(
+        let config = AuthenticatorConfig::from_env_style_config(
             Some("shared-secret"),
             "",
             "https://secret-issuer.example.com=secret,https://jwks-issuer.example.com=jwks:/.well-known/jwks.json",
@@ -976,7 +1074,7 @@ mod tests {
             .unwrap();
 
         // Mixed config triggers PerIssuer strategy
-        let config = AuthenticatorConfig::new(
+        let config = AuthenticatorConfig::from_env_style_config(
             Some("shared-secret"),
             "",
             "https://secret-issuer.example.com=secret,https://jwks-issuer.example.com=jwks:/.well-known/jwks.json",
@@ -1004,7 +1102,7 @@ mod tests {
             .unwrap();
 
         // Config only allows RS256
-        let config = AuthenticatorConfig::new(
+        let config = AuthenticatorConfig::from_env_style_config(
             Some("shared-secret"),
             "RS256",
             "https://issuer.example.com",
@@ -1032,7 +1130,7 @@ mod tests {
             .unwrap();
 
         // Config allows HS256 and RS256
-        let config = AuthenticatorConfig::new(
+        let config = AuthenticatorConfig::from_env_style_config(
             Some("shared-secret"),
             "HS256,RS256",
             "https://issuer.example.com",
@@ -1059,7 +1157,7 @@ mod tests {
             .into_token("shared-secret")
             .unwrap();
 
-        let config = AuthenticatorConfig::new(
+        let config = AuthenticatorConfig::from_env_style_config(
             Some("shared-secret"),
             "",
             "https://issuer.example.com",
@@ -1086,7 +1184,7 @@ mod tests {
             .into_token("shared-secret")
             .unwrap();
 
-        let config = AuthenticatorConfig::new(
+        let config = AuthenticatorConfig::from_env_style_config(
             Some("shared-secret"),
             "",
             "https://issuer.example.com",
@@ -1138,6 +1236,23 @@ mod tests {
         }
     }
 
+    /// Creates a test configuration with a custom key fetcher for a given issuer.
+    fn create_custom_key_fetcher_config(
+        issuer: &str,
+        key_fetcher: Arc<dyn KeyFetcher>,
+        default_locale: String,
+    ) -> AuthenticatorConfig {
+        AuthenticatorConfig::new(
+            None,
+            [issuer.to_owned()].into(),
+            None,
+            default_locale,
+            None,
+            key_fetcher,
+            None,
+        )
+    }
+
     #[tokio::test]
     async fn custom_key_fetcher_validates_token() {
         use crate::web::auth::user::tests::Builder;
@@ -1154,8 +1269,7 @@ mod tests {
 
         // Create authenticator with mock key fetcher
         let key_fetcher = Arc::new(MockKeyFetcher::new(b"jwks-secret-key"));
-        let config =
-            AuthenticatorConfig::with_custom_key_fetcher(issuer, key_fetcher, "en-US".to_string());
+        let config = create_custom_key_fetcher_config(issuer, key_fetcher, "en-US".to_string());
         let authenticator = Authenticator::new(config);
 
         let claims = authenticator.parse_jwt(&token).await.unwrap();
@@ -1178,8 +1292,7 @@ mod tests {
 
         // Key fetcher returns different key
         let key_fetcher = Arc::new(MockKeyFetcher::new(b"wrong-secret"));
-        let config =
-            AuthenticatorConfig::with_custom_key_fetcher(issuer, key_fetcher, "en-US".to_string());
+        let config = create_custom_key_fetcher_config(issuer, key_fetcher, "en-US".to_string());
         let authenticator = Authenticator::new(config);
 
         let result = authenticator.parse_jwt(&token).await;
@@ -1213,8 +1326,7 @@ mod tests {
 
         // Key fetcher expects specific kid
         let key_fetcher = Arc::new(MockKeyFetcher::new(b"jwks-secret").with_kid("key-123"));
-        let config =
-            AuthenticatorConfig::with_custom_key_fetcher(issuer, key_fetcher, "en-US".to_string());
+        let config = create_custom_key_fetcher_config(issuer, key_fetcher, "en-US".to_string());
         let authenticator = Authenticator::new(config);
 
         let claims = authenticator.parse_jwt(&token).await.unwrap();
@@ -1248,8 +1360,7 @@ mod tests {
 
         // Key fetcher expects different kid
         let key_fetcher = Arc::new(MockKeyFetcher::new(b"jwks-secret").with_kid("expected-key-id"));
-        let config =
-            AuthenticatorConfig::with_custom_key_fetcher(issuer, key_fetcher, "en-US".to_string());
+        let config = create_custom_key_fetcher_config(issuer, key_fetcher, "en-US".to_string());
         let authenticator = Authenticator::new(config);
 
         let result = authenticator.parse_jwt(&token).await;
