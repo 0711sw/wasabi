@@ -40,10 +40,15 @@
 //! 14:32:01.234 INFO  | myapp::server: Starting server on port 8080
 //! ```
 
-use tracing_subscriber::fmt::format::FmtSpan;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{EnvFilter, Layer, Registry};
+
+#[cfg(feature = "pretty_logs")]
+use tracing_subscriber::fmt::format::FmtSpan;
+
+#[cfg(not(feature = "pretty_logs"))]
+mod production;
 
 #[cfg(feature = "pretty_logs")]
 mod pretty;
@@ -102,11 +107,24 @@ pub fn setup_tracing() {
 ///
 /// Uses `RUST_LOG` environment variable for filtering, defaulting to `info`.
 /// Format depends on whether `pretty_logs` feature is enabled.
+#[cfg(feature = "pretty_logs")]
 fn setup_console_layer() -> Box<dyn Layer<Registry> + Send + Sync + 'static> {
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
 
     tracing_subscriber::fmt::layer()
         .with_span_events(FmtSpan::NEW)
+        .event_format(setup_console_format())
+        .with_filter(filter)
+        .boxed()
+}
+
+/// Creates the console output layer for production (no ANSI, with span context).
+#[cfg(not(feature = "pretty_logs"))]
+fn setup_console_layer() -> Box<dyn Layer<Registry> + Send + Sync + 'static> {
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+
+    tracing_subscriber::fmt::layer()
+        .with_ansi(false)
         .event_format(setup_console_format())
         .with_filter(filter)
         .boxed()
@@ -118,9 +136,6 @@ fn setup_console_format() -> pretty::PrettyConsoleLogFormat {
 }
 
 #[cfg(not(feature = "pretty_logs"))]
-fn setup_console_format()
--> tracing_subscriber::fmt::format::Format<tracing_subscriber::fmt::format::Full, ()> {
-    tracing_subscriber::fmt::format()
-        .with_ansi(false)
-        .without_time()
+fn setup_console_format() -> production::ProductionLogFormat {
+    production::ProductionLogFormat
 }
