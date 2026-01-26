@@ -135,8 +135,14 @@ async fn run_background_loop(client: &Client, stream: &str, mut rx: mpsc::Receiv
     flush_batch(client, stream, &mut buffer).await;
 }
 
-#[tracing::instrument(level = "debug", skip(client, buffer))]
 async fn flush_batch(client: &Client, stream: &str, buffer: &mut Vec<String>) {
+    if !buffer.is_empty() {
+        do_flush_batch(client, stream, buffer).await;
+    }
+}
+
+#[tracing::instrument(level = "debug", skip(client, buffer))]
+async fn do_flush_batch(client: &Client, stream: &str, buffer: &mut Vec<String>) {
     let records = buffer
         .drain(..)
         .flat_map(|json| Record::builder().data(json.into_bytes().into()).build())
