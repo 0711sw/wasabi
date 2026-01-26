@@ -1,16 +1,30 @@
 //! Tracing and logging infrastructure.
 //!
-//! Provides a unified [`setup_tracing`] function that configures the `tracing` subscriber
+//! Provides a unified [`init_tracing`] function that configures the `tracing` subscriber
 //! with console output and optional OpenTelemetry export.
 //!
 //! # Usage
 //!
-//! Call [`setup_tracing`] once at application startup:
+//! Call [`init_tracing`] once at application startup from within a Tokio runtime context:
+//!
+//! ```rust,ignore
+//! #[tokio::main]
+//! async fn main() {
+//!     wasabi_core::logging::init_tracing().await;
+//!     // ... rest of application
+//! }
+//! ```
+//!
+//! Or with manual runtime setup:
 //!
 //! ```rust,ignore
 //! fn main() {
-//!     wasabi_core::logging::setup_tracing();
-//!     // ... rest of application
+//!     let runtime = tokio::runtime::Runtime::new().unwrap();
+//!     let _guard = runtime.enter();
+//!     runtime.block_on(async {
+//!         wasabi_core::logging::init_tracing().await;
+//!         // ... rest of application
+//!     });
 //! }
 //! ```
 //!
@@ -66,11 +80,19 @@ mod otel;
 /// If OpenTelemetry setup fails (e.g., missing endpoint), it falls back to console-only
 /// logging and logs a warning.
 ///
+/// # Tokio Runtime Requirement
+///
+/// This function **must be called from within a Tokio runtime context**. The OpenTelemetry
+/// OTLP exporter uses tonic (gRPC), which requires an active Tokio runtime even though
+/// this function has an async signature. Calling without a runtime will panic with:
+/// "there is no reactor running, must be called from the context of a Tokio 1.x runtime"
+///
 /// # Panics
 ///
-/// Panics if called more than once (tracing subscriber can only be set once).
+/// - Panics if called more than once (tracing subscriber can only be set once).
+/// - Panics if called outside a Tokio runtime context (when `open_telemetry` feature is enabled).
 #[cfg(feature = "open_telemetry")]
-pub fn setup_tracing() {
+pub async fn init_tracing() {
     let console_layer = setup_console_layer();
 
     match otel::setup_open_telemetry_layer() {
@@ -96,8 +118,13 @@ pub fn setup_tracing() {
 ///
 /// This version is used when the `open_telemetry` feature is not enabled.
 /// See the feature-enabled version for full documentation.
+///
+/// # Note
+///
+/// This function is async for API consistency with the `open_telemetry` version,
+/// even though it doesn't perform any async operations.
 #[cfg(not(feature = "open_telemetry"))]
-pub fn setup_tracing() {
+pub async fn init_tracing() {
     let console_layer = setup_console_layer();
     Registry::default().with(console_layer).init();
     tracing::info!("Tracing initialized successfully [reporting to console only]");

@@ -14,7 +14,7 @@
 //!
 //! #[tokio::main]
 //! async fn main() -> anyhow::Result<()> {
-//!     logging::init();
+//!     logging::init_tracing().await;
 //!
 //!     let routes = warp::path("health").map(|| "OK");
 //!     run_webserver(routes).await
