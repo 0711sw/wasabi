@@ -25,7 +25,11 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 
 /// Regex for normalizing names to lowercase alphanumeric with underscores.
-static NON_CHARS: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"[^a-z0-9]+").unwrap());
+static NON_CHARS: LazyLock<Regex> = LazyLock::new(|| {
+    // This regex pattern is static and known-valid at compile time
+    #[expect(clippy::unwrap_used, reason = "static regex pattern is always valid")]
+    Regex::new(r"[^a-z0-9]+").unwrap()
+});
 
 /// Channel capacity - provides backpressure if Firehose can't keep up.
 const EVENT_BUFFER_SIZE: usize = 8192;

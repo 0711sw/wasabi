@@ -35,8 +35,11 @@ pub fn validate_str<S: AsRef<str>>(
 }
 
 /// Matches safe ID characters: alphanumeric plus `_`, `-`, `:`, `/` (max 64 chars).
-static VALID_ID_REGEX: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^[a-zA-Z0-9_\-:/]{1,64}$").expect("Invalid regex"));
+static VALID_ID_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    // This regex pattern is static and known-valid at compile time
+    #[expect(clippy::expect_used, reason = "static regex pattern is always valid")]
+    Regex::new(r"^[a-zA-Z0-9_\-:/]{1,64}$").expect("Invalid regex")
+});
 
 /// Checks if an ID contains only safe characters and is within length limit.
 pub fn is_valid_id(id: &str) -> bool {

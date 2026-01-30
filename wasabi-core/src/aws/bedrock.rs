@@ -357,6 +357,11 @@ impl ToolBuilder {
     }
 
     /// Add a required string parameter.
+    #[expect(
+        clippy::unwrap_used,
+        clippy::indexing_slicing,
+        reason = "schema is initialized with known structure"
+    )]
     pub fn with_string_param(mut self, name: &str, description: &str) -> Self {
         self.schema["properties"][name] = json!({
             "type": "string",
@@ -370,6 +375,7 @@ impl ToolBuilder {
     }
 
     /// Add an optional string parameter.
+    #[expect(clippy::indexing_slicing, reason = "schema is initialized with known structure")]
     pub fn with_optional_string_param(mut self, name: &str, description: &str) -> Self {
         self.schema["properties"][name] = json!({
             "type": "string",
@@ -379,6 +385,11 @@ impl ToolBuilder {
     }
 
     /// Add a required number parameter.
+    #[expect(
+        clippy::unwrap_used,
+        clippy::indexing_slicing,
+        reason = "schema is initialized with known structure"
+    )]
     pub fn with_number_param(mut self, name: &str, description: &str) -> Self {
         self.schema["properties"][name] = json!({
             "type": "number",
@@ -422,6 +433,7 @@ impl ConversationBuilder {
     }
 
     /// Add a user message.
+    #[expect(clippy::expect_used, reason = "builder has all required fields")]
     pub fn user(mut self, text: impl Into<String>) -> Self {
         self.messages.push(
             Message::builder()
@@ -434,6 +446,7 @@ impl ConversationBuilder {
     }
 
     /// Add an assistant message.
+    #[expect(clippy::expect_used, reason = "builder has all required fields")]
     pub fn assistant(mut self, text: impl Into<String>) -> Self {
         self.messages.push(
             Message::builder()
@@ -446,6 +459,7 @@ impl ConversationBuilder {
     }
 
     /// Add a tool use (assistant's tool call).
+    #[expect(clippy::expect_used, reason = "builders have all required fields")]
     pub fn tool_use(
         mut self,
         id: impl Into<String>,
@@ -485,6 +499,7 @@ impl ConversationBuilder {
     }
 
     /// Add a tool result (user's response to tool call).
+    #[expect(clippy::expect_used, reason = "builders have all required fields")]
     pub fn tool_result(
         mut self,
         tool_use_id: impl Into<String>,
@@ -558,6 +573,7 @@ impl Default for ToolCallConfig {
 /// - Automatically continues the conversation with tool results
 /// - Streams all text/metadata events to the caller
 /// - Stops after `max_rounds` or when the model finishes without tool calls
+#[expect(clippy::expect_used, reason = "AWS SDK builders have all required fields set")]
 pub async fn converse_with_tools(
     client: Client,
     model_id: &str,

@@ -113,17 +113,38 @@
 //! | `RUST_TRACE` | OpenTelemetry trace filter | `debug` |
 //! | `OTEL_EXPORTER_OTLP_ENDPOINT` | OpenTelemetry OTLP endpoint | (required for OTel) |
 #![deny(
+    // Code Quality
     warnings,
     missing_docs,
     trivial_casts,
     trivial_numeric_casts,
     unused_extern_crates,
     unused_import_braces,
-    unused_results
+    unused_results,
+    // Safety
+    unsafe_code,
+    // Robustness
+    rust_2018_idioms,
+    nonstandard_style,
+    future_incompatible,
+    // Clippy - Panic Prevention
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::indexing_slicing
 )]
 // Relax some lints for test code
-#![cfg_attr(test, allow(unused_results, dead_code, unused_imports, missing_docs))]
-
+#![cfg_attr(
+    test,
+    allow(
+        unused_results,
+        missing_docs,
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::panic,
+        clippy::indexing_slicing
+    )
+)]
 use std::env;
 use std::sync::LazyLock;
 

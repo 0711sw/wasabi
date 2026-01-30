@@ -492,8 +492,6 @@ mod tests {
 
     #[test]
     fn into_rejection_preserves_api_error_status() {
-        use crate::web::error::ResultExt;
-
         // Create an error with ApiError context
         let err: anyhow::Error = anyhow::anyhow!("root cause")
             .context(ApiError::new(StatusCode::NOT_FOUND, "Not found"));
@@ -691,6 +689,7 @@ mod tests {
     async fn decode_json_rejects_invalid_json() {
         #[derive(serde::Deserialize, Debug)]
         struct TestData {
+            #[allow(dead_code)]
             name: String,
         }
 

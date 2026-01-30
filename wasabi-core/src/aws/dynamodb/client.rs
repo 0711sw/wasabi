@@ -274,6 +274,7 @@ mod tests {
 
     #[tokio::test]
     #[ignore]
+    #[allow(unsafe_code)]
     async fn does_table_exists_detects_nonexistent_table() {
         unsafe {
             env::set_var("DYNAMO_TABLE_PREFIX", "wasabi-test");
@@ -287,6 +288,7 @@ mod tests {
 
     #[tokio::test]
     #[ignore]
+    #[allow(unsafe_code)]
     async fn create_table_actually_creates_a_table() {
         unsafe {
             env::set_var("DYNAMO_TABLE_PREFIX", "wasabi-test");

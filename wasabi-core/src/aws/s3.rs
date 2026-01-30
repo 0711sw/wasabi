@@ -746,6 +746,7 @@ mod tests {
 
     #[tokio::test]
     #[ignore]
+    #[allow(unsafe_code)]
     async fn does_bucket_exist_detects_nonexistent_bucket() {
         unsafe {
             env::set_var("S3_BUCKET_SUFFIX", "wasabi-test.0711sw.net");
@@ -763,6 +764,7 @@ mod tests {
 
     #[tokio::test]
     #[ignore]
+    #[allow(unsafe_code)]
     async fn create_bucket_creates_bucket_if_non_existent() {
         unsafe {
             env::set_var("S3_BUCKET_SUFFIX", "wasabi-test.0711sw.net");

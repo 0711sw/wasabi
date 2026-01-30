@@ -25,7 +25,7 @@ macro_rules! styled {
 }
 
 impl PrettyConsoleLogFormat {
-    fn format_timestamp(writer: &mut Writer) -> std::fmt::Result {
+    fn format_timestamp(writer: &mut Writer<'_>) -> std::fmt::Result {
         styled!(writer, Style::new().dimmed(), {
             write!(writer, "{} ", chrono::offset::Local::now().format("%T%.3f"))?;
         });
@@ -33,7 +33,7 @@ impl PrettyConsoleLogFormat {
         Ok(())
     }
 
-    fn format_level(writer: &mut Writer, event: &Event<'_>) -> std::fmt::Result {
+    fn format_level(writer: &mut Writer<'_>, event: &Event<'_>) -> std::fmt::Result {
         let metadata = event.metadata();
         let style = match *event.metadata().level() {
             Level::TRACE => Style::new().fg(Color::Purple),
@@ -50,7 +50,7 @@ impl PrettyConsoleLogFormat {
         Ok(())
     }
 
-    fn format_nesting(writer: &mut Writer, nesting: usize) -> std::fmt::Result {
+    fn format_nesting(writer: &mut Writer<'_>, nesting: usize) -> std::fmt::Result {
         styled!(writer, Style::new().fg(Color::Magenta), {
             write!(writer, " ")?;
             for _ in 0..nesting {
@@ -61,7 +61,7 @@ impl PrettyConsoleLogFormat {
         Ok(())
     }
 
-    fn format_target(writer: &mut Writer, event: &Event<'_>) -> std::fmt::Result {
+    fn format_target(writer: &mut Writer<'_>, event: &Event<'_>) -> std::fmt::Result {
         styled!(writer, Style::new().dimmed(), {
             write!(writer, "{}: ", event.metadata().target())?;
         });
@@ -70,7 +70,7 @@ impl PrettyConsoleLogFormat {
     }
 
     fn format_new_span<S, N>(
-        writer: &mut Writer,
+        writer: &mut Writer<'_>,
         ctx: &FmtContext<'_, S, N>,
         event: &Event<'_>,
     ) -> std::fmt::Result
@@ -90,6 +90,8 @@ impl PrettyConsoleLogFormat {
                 write!(writer, "{}", span.name())?;
 
                 let ext = span.extensions();
+                // FormattedFields is always present for spans created by the subscriber
+                #[expect(clippy::expect_used, reason = "FormattedFields always set by subscriber")]
                 let fields = &ext
                     .get::<FormattedFields<N>>()
                     .expect("will never be `None`");

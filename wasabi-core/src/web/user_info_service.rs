@@ -29,7 +29,6 @@ mod tests {
     use super::*;
     use crate::web::auth::user::tests::Builder;
     use crate::web::auth::{CLAIM_EMAIL, CLAIM_NAME, CLAIM_SUB, CLAIM_TENANT};
-    use serde_json::json;
 
     #[tokio::test]
     async fn get_user_info_returns_all_claims() {

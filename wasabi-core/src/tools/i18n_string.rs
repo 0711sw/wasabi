@@ -99,7 +99,7 @@ struct I18nStringVisitor;
 impl<'de> Visitor<'de> for I18nStringVisitor {
     type Value = I18nString;
 
-    fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str("either a string or a map of translations")
     }
 

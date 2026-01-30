@@ -87,6 +87,7 @@ impl User {
     }
 
     /// Returns the user if they have at least one of the given permissions, otherwise 401.
+    #[expect(clippy::indexing_slicing, reason = "length checked to be 1")]
     pub fn enforce_any_permission(self, permissions: &[&str]) -> anyhow::Result<Self> {
         if self.has_any_permission(permissions) {
             Ok(self)
@@ -208,11 +209,6 @@ pub(crate) mod tests {
 
         pub fn with_value(mut self, key: &str, value: Value) -> Self {
             self.claims.insert(key.to_owned(), value);
-            self
-        }
-
-        pub fn with_jwt_token(mut self, token: impl ToString) -> Self {
-            self.jwt_token = token.to_string();
             self
         }
 
