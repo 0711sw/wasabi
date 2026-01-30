@@ -290,6 +290,21 @@ macro_rules! routes {
     };
 }
 
+/// Creates a closure that converts a business logic result into a JSON response.
+///
+/// Use with `.map()` for sync handlers or `.then()` for async handlers:
+///
+/// ```rust
+/// // Sync: .map(json_handler!(get_shells))
+/// // Async: .then(|id| async move { json_handler!(get_shell(id).await) })
+/// ```
+#[macro_export]
+macro_rules! json_handler {
+    ($call:expr) => {
+        $crate::web::warp::into_response($call)
+    };
+}
+
 /// Starts an HTTP server with tracing and graceful shutdown.
 ///
 /// Reads `BIND_ADDRESS` from environment. Waits for shutdown signal,
