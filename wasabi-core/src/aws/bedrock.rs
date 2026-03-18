@@ -375,7 +375,10 @@ impl ToolBuilder {
     }
 
     /// Add an optional string parameter.
-    #[expect(clippy::indexing_slicing, reason = "schema is initialized with known structure")]
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "schema is initialized with known structure"
+    )]
     pub fn with_optional_string_param(mut self, name: &str, description: &str) -> Self {
         self.schema["properties"][name] = json!({
             "type": "string",
@@ -573,7 +576,10 @@ impl Default for ToolCallConfig {
 /// - Automatically continues the conversation with tool results
 /// - Streams all text/metadata events to the caller
 /// - Stops after `max_rounds` or when the model finishes without tool calls
-#[expect(clippy::expect_used, reason = "AWS SDK builders have all required fields set")]
+#[expect(
+    clippy::expect_used,
+    reason = "AWS SDK builders have all required fields set"
+)]
 pub async fn converse_with_tools(
     client: Client,
     model_id: &str,

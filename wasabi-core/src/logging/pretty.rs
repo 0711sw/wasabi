@@ -91,7 +91,10 @@ impl PrettyConsoleLogFormat {
 
                 let ext = span.extensions();
                 // FormattedFields is always present for spans created by the subscriber
-                #[expect(clippy::expect_used, reason = "FormattedFields always set by subscriber")]
+                #[expect(
+                    clippy::expect_used,
+                    reason = "FormattedFields always set by subscriber"
+                )]
                 let fields = &ext
                     .get::<FormattedFields<N>>()
                     .expect("will never be `None`");
