@@ -112,6 +112,7 @@
 //! | `RUST_LOG` | Console log filter (e.g., `info`, `myapp=debug`) | `info` |
 //! | `RUST_TRACE` | OpenTelemetry trace filter | `debug` |
 //! | `OTEL_EXPORTER_OTLP_ENDPOINT` | OpenTelemetry OTLP endpoint | (required for OTel) |
+#![recursion_limit = "256"]
 #![deny(
     // Code Quality
     warnings,
