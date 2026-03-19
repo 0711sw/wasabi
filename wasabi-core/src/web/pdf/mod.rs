@@ -16,10 +16,10 @@ mod world;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use typst::Library;
 use typst::layout::PagedDocument;
 use typst::text::FontBook;
 use typst::utils::LazyHash;
+use typst::{Library, LibraryExt as _};
 use typst_kit::fonts::{FontSlot, Fonts};
 
 use self::error::PdfError;
