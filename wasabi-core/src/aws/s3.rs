@@ -269,7 +269,7 @@ impl S3Client {
     }
 
     /// Deletes an object from S3.
-    #[tracing::instrument(level = "debug", skip(self), ret(Debug), err(Display))]
+    #[tracing::instrument(level = "debug", skip(self), err(Display))]
     pub async fn delete_object(&self, bucket: &BucketName, key: &str) -> anyhow::Result<()> {
         let effective_bucket = self.effective_name(bucket);
 

@@ -91,6 +91,7 @@ impl Authenticator {
     }
 
     /// Validates the JWT and returns the extracted claims.
+    #[tracing::instrument(level = "debug", skip(self, jwt_token), err(Display))]
     pub async fn parse_jwt(&self, jwt_token: &str) -> anyhow::Result<ClaimsSet> {
         let claims = Self::decode_payload(jwt_token)
             .context("Invalid JWT present")

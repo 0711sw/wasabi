@@ -104,7 +104,7 @@ pub fn enforce_user_with_any_permission(
         .untuple_one()
 }
 
-#[tracing::instrument(level = "trace", skip(auth), ret(Debug), err(Display))]
+#[tracing::instrument(level = "debug", skip(auth), err(Display))]
 async fn parse_jwt_token(
     bearer_token: Option<String>,
     auth: Arc<Authenticator>,

@@ -39,6 +39,7 @@ pub struct UrlJwksFetcher {
 
 #[async_trait]
 impl JwksFetcher for UrlJwksFetcher {
+    #[tracing::instrument(level = "debug", skip(self), fields(url = %self.url), err(Display))]
     async fn fetch(&self) -> anyhow::Result<KeyCache> {
         // Note that we pass a custom client in here, so that our dependency "reqwest"
         // is actually marked as used. We need this dependency to activate "rustls-tls" as
@@ -97,11 +98,12 @@ impl JwksCache {
     ///
     /// Returns a cached key if available and not expired. Otherwise fetches
     /// fresh keys from the source (respecting the cooldown period).
+    #[tracing::instrument(level = "debug", skip(self), fields(key_id = %key_id), err(Display))]
     pub(crate) async fn fetch_key(&self, key_id: &str) -> anyhow::Result<Arc<DecodingKey>> {
         let mut cached_keys = self.load_keys();
-        let last_loaded_seconds = self.compute_seconds_since_last_load();
+        let last_load_seconds = self.compute_seconds_since_last_load();
 
-        if last_loaded_seconds > MAX_CACHE_TTL_SECONDS
+        if last_load_seconds > MAX_CACHE_TTL_SECONDS
             || cached_keys
                 .as_ref()
                 .and_then(|keys| keys.get(key_id))
@@ -111,9 +113,14 @@ impl JwksCache {
         }
 
         if cached_keys.is_none()
-            && (last_loaded_seconds == NOT_YET_LOADED
-                || last_loaded_seconds > MIN_WAIT_BETWEEN_LOADS_SECONDS)
+            && (last_load_seconds == NOT_YET_LOADED
+                || last_load_seconds > MIN_WAIT_BETWEEN_LOADS_SECONDS)
         {
+            tracing::debug!(
+                last_load_seconds,
+                reason = "unknown_kid_or_ttl_expired",
+                "refetching JWKS"
+            );
             self.last_load.store(Some(Arc::new(SystemTime::now())));
             let keys = self
                 .fetcher
@@ -122,15 +129,32 @@ impl JwksCache {
                 .inspect_err(|_| self.cached_keys.store(None))?;
             cached_keys = Some(Arc::new(keys));
             self.cached_keys.store(cached_keys.clone());
+            if let Some(keys) = cached_keys.as_ref() {
+                tracing::info!(
+                    loaded_kids = ?keys.keys().collect::<Vec<_>>(),
+                    "JWKS refreshed"
+                );
+            }
         }
 
         if let Some(keys) = cached_keys {
             if let Some(key) = keys.get(key_id) {
                 Ok(key.clone())
             } else {
+                tracing::warn!(
+                    key_id,
+                    cached_kids = ?keys.keys().collect::<Vec<_>>(),
+                    last_load_seconds,
+                    "JWT uses unknown kid — rejecting"
+                );
                 bail!("Unknown JWKS key: {}", key_id);
             }
         } else {
+            tracing::warn!(
+                key_id,
+                last_load_seconds,
+                "JWKS cache empty and refetch blocked by cooldown"
+            );
             bail!("JWKS not loaded or empty");
         }
     }
