@@ -665,9 +665,10 @@ pub async fn converse_with_tools(
                 break;
             }
 
-            // Add assistant's tool calls to history and notify about tool usage
+            // Add ALL assistant tool calls as a single message
+            // (Bedrock requires all tool_use blocks from one response in one message)
+            let mut tool_use_blocks = Vec::new();
             for tool_call in &tool_calls {
-                // Emit raw ToolUse event with ID (for open-loop scenarios)
                 yield Ok(ModelEvent::ToolUse(tool_call.clone()));
 
                 // Parse tool input as JSON. If empty or invalid, default to empty object
@@ -686,25 +687,28 @@ pub async fn converse_with_tools(
                         })
                 };
 
-                conversation_history.push(
-                    Message::builder()
-                        .role(ConversationRole::Assistant)
-                        .content(ContentBlock::ToolUse(
-                            ToolUseBlock::builder()
-                                .tool_use_id(tool_call.id.clone())
-                                .name(tool_call.name.clone())
-                                .input(json_value_to_document(doc))
-                                .build()
-                                .expect("Failed to build tool use block"),
-                        ))
+                tool_use_blocks.push(ContentBlock::ToolUse(
+                    ToolUseBlock::builder()
+                        .tool_use_id(tool_call.id.clone())
+                        .name(tool_call.name.clone())
+                        .input(json_value_to_document(doc))
                         .build()
-                        .expect("Failed to build message"),
-                );
+                        .expect("Failed to build tool use block"),
+                ));
             }
 
-            // Execute tool calls and add results to history
+            conversation_history.push(
+                Message::builder()
+                    .role(ConversationRole::Assistant)
+                    .set_content(Some(tool_use_blocks))
+                    .build()
+                    .expect("Failed to build message"),
+            );
+
+            // Execute tool calls and collect ALL results into a single message
+            // (Bedrock requires all tool_result blocks in one message matching the tool_use message)
+            let mut tool_result_blocks = Vec::new();
             for tool_call in tool_calls {
-                // Notify that tool execution is starting
                 yield Ok(ModelEvent::ToolCallStarted {
                     id: tool_call.id.clone(),
                     name: tool_call.name.clone(),
@@ -714,28 +718,29 @@ pub async fn converse_with_tools(
                 let result = (config.callback)(tool_call.name.clone(), tool_call.input.clone()).await
                     .unwrap_or_else(|e| format!("Tool execution error: {}", e));
 
-                // Notify that tool execution completed
                 yield Ok(ModelEvent::ToolCallCompleted {
                     id: tool_call.id.clone(),
                     name: tool_call.name.clone(),
                     result: result.clone(),
                 });
 
-                conversation_history.push(
-                    Message::builder()
-                        .role(ConversationRole::User)
-                        .content(ContentBlock::ToolResult(
-                            ToolResultBlock::builder()
-                                .tool_use_id(tool_call.id)
-                                .content(ToolResultContentBlock::Text(result))
-                                .status(ToolResultStatus::Success)
-                                .build()
-                                .expect("Failed to build tool result block"),
-                        ))
+                tool_result_blocks.push(ContentBlock::ToolResult(
+                    ToolResultBlock::builder()
+                        .tool_use_id(tool_call.id)
+                        .content(ToolResultContentBlock::Text(result))
+                        .status(ToolResultStatus::Success)
                         .build()
-                        .expect("Failed to build message"),
-                );
+                        .expect("Failed to build tool result block"),
+                ));
             }
+
+            conversation_history.push(
+                Message::builder()
+                    .role(ConversationRole::User)
+                    .set_content(Some(tool_result_blocks))
+                    .build()
+                    .expect("Failed to build message"),
+            );
 
             // Continue the loop for next round
         }
