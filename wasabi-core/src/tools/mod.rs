@@ -4,6 +4,7 @@ use bytes::Bytes;
 use futures_util::Stream;
 use std::pin::Pin;
 
+pub mod dotenv;
 pub mod i18n_string;
 pub mod id_generator;
 pub mod system;
