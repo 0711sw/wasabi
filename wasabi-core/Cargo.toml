@@ -37,7 +37,12 @@ opentelemetry-otlp = { version = "0.31", features = ["tonic", "grpc-tonic"], opt
 opentelemetry_sdk = { version = "0.31", features = ["rt-tokio"], optional = true }
 jsonwebtoken = { version = "10.3", default-features = false, features = ["aws_lc_rs"] }
 jwks = { version = "0.5", default-features = false, features = ["aws_lc_rs"] }
-reqwest = { version = "0.13", features = ["rustls"] }
+# default-features = false drops the HTTP/3 chain (quinn / quinn-proto)
+# which we don't use — it kept landing in the lockfile via reqwest's
+# default features and triggering cargo audit on quinn CVEs we never run.
+# Keep the explicit list minimal: rustls TLS (matches jsonwebtoken /
+# jwks aws_lc_rs posture), HTTP/2, and charset sniffing for JWKS body.
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "http2", "charset"] }
 arc-swap = "1.7"
 nu-ansi-term = { version = "0.50", optional = true }
 rand = "0.9.0"
