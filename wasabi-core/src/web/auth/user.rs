@@ -5,15 +5,17 @@
 
 use crate::status_bail;
 use crate::web::auth::{
-    CLAIM_ACT, CLAIM_EMAIL, CLAIM_LOCALE, CLAIM_NAME, CLAIM_PERMISSIONS, CLAIM_SUB, CLAIM_TENANT,
-    DEFAULT_LOCALE,
+    CLAIM_ACT, CLAIM_EMAIL, CLAIM_ISS, CLAIM_LOCALE, CLAIM_NAME, CLAIM_PERMISSIONS, CLAIM_SUB,
+    CLAIM_TENANT, DEFAULT_LOCALE,
 };
 use crate::web::error::ResultExt;
 use crate::web::validation::{is_valid_id, is_valid_str};
 use anyhow::Context;
+use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
 use serde_json::Value;
 use std::collections::{BTreeMap, HashSet};
 use std::fmt::{Debug, Formatter};
+use std::time::{SystemTime, UNIX_EPOCH};
 use warp::http::StatusCode;
 
 pub(crate) type ClaimsSet = BTreeMap<String, Value>;
@@ -34,6 +36,16 @@ impl User {
             .and_then(Value::as_str)
             .filter(|id| is_valid_id(id))
             .context("No or invalid  tenant id ('tenant') in JWT token present!")
+            .mark_client_error()
+    }
+
+    /// Returns the token issuer from the `iss` claim.
+    pub fn issuer(&self) -> anyhow::Result<&str> {
+        self.claims
+            .get(CLAIM_ISS)
+            .and_then(Value::as_str)
+            .filter(|iss| is_valid_str(iss, 1, 512))
+            .context("No or invalid issuer ('iss') in JWT token present!")
             .mark_client_error()
     }
 
@@ -120,6 +132,80 @@ impl User {
             .and_then(Value::as_str)
             .unwrap_or(DEFAULT_LOCALE)
     }
+
+    /// Returns a [`UserBuilder`] for constructing a `User` from individual claims.
+    ///
+    /// Primarily intended for tests (and internal callers) that already have
+    /// validated claims and want to exercise the accessors — or produce a signed
+    /// token via [`UserBuilder::into_token`] — without going through JWT parsing.
+    pub fn builder() -> UserBuilder {
+        UserBuilder::new()
+    }
+}
+
+/// Fluent builder for constructing a [`User`] from individual claims.
+///
+/// This assembles a claim set directly, bypassing JWT validation, which makes it
+/// convenient for tests that need a `User` with specific claims. A fresh builder
+/// already carries an `exp` claim one hour in the future.
+pub struct UserBuilder {
+    jwt_token: String,
+    claims: ClaimsSet,
+}
+
+impl UserBuilder {
+    /// Creates a new builder with an `exp` claim set to one hour from now.
+    pub fn new() -> Self {
+        let exp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|since_epoch| since_epoch.as_secs())
+            .unwrap_or_default()
+            + 3600;
+
+        let mut claims = ClaimsSet::new();
+        let _ = claims.insert("exp".to_owned(), Value::from(exp));
+
+        UserBuilder {
+            jwt_token: String::new(),
+            claims,
+        }
+    }
+
+    /// Sets a string claim.
+    pub fn with_string(mut self, key: &str, value: &str) -> Self {
+        let _ = self.claims.insert(key.to_owned(), Value::from(value));
+        self
+    }
+
+    /// Sets an arbitrary JSON claim.
+    pub fn with_value(mut self, key: &str, value: Value) -> Self {
+        let _ = self.claims.insert(key.to_owned(), value);
+        self
+    }
+
+    /// Builds the [`User`] from the accumulated claims.
+    pub fn build(self) -> User {
+        User {
+            jwt_token: self.jwt_token,
+            claims: self.claims,
+        }
+    }
+
+    /// Signs the accumulated claims into a JWT string using the given HS256 secret.
+    pub fn into_token(self, secret: &str) -> anyhow::Result<String> {
+        encode(
+            &Header::new(Algorithm::HS256),
+            &self.claims,
+            &EncodingKey::from_secret(secret.as_bytes()),
+        )
+        .context("Signing failed")
+    }
+}
+
+impl Default for UserBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Debug for User {
@@ -172,68 +258,20 @@ impl Debug for User {
 
 #[cfg(test)]
 pub(crate) mod tests {
-    use crate::web::auth::user::ClaimsSet;
     use crate::web::auth::*;
-    use anyhow::Context;
-    use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
-    use serde_json::{Value, json};
-    use std::time::{SystemTime, UNIX_EPOCH};
+    use serde_json::json;
 
-    pub struct Builder {
-        jwt_token: String,
-        claims: ClaimsSet,
-    }
+    // The former in-module test `Builder` is now the public `UserBuilder`. The
+    // alias keeps the existing test call sites (here and in sibling modules that
+    // import `user::tests::Builder`) working unchanged.
+    pub(crate) use super::UserBuilder as Builder;
 
-    impl Builder {
-        pub fn new() -> Self {
-            // Set exp to 1 hour from now by default
-            let exp = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_secs()
-                + 3600;
-
-            let mut claims = ClaimsSet::new();
-            claims.insert("exp".to_owned(), Value::from(exp));
-
-            Builder {
-                jwt_token: String::new(),
-                claims,
-            }
-        }
-
-        pub fn with_string(mut self, key: &str, value: &str) -> Self {
-            self.claims.insert(key.to_owned(), Value::from(value));
-            self
-        }
-
-        pub fn with_value(mut self, key: &str, value: Value) -> Self {
-            self.claims.insert(key.to_owned(), value);
-            self
-        }
-
-        pub fn build_user(self) -> User {
-            User {
-                jwt_token: self.jwt_token,
-                claims: self.claims,
-            }
-        }
-
-        pub fn into_token(self, secret: &str) -> Result<String, anyhow::Error> {
-            encode(
-                &Header::new(Algorithm::HS256),
-                &self.claims,
-                &EncodingKey::from_secret(secret.as_bytes()),
-            )
-            .context("Signing failed")
-        }
-    }
     #[test]
     fn simple_user_debug_formatting() {
         let user = Builder::new()
             .with_string(CLAIM_SUB, "1234")
             .with_string(CLAIM_TENANT, "0815")
-            .build_user();
+            .build();
 
         assert_eq!(
             format!("{:?}", user),
@@ -247,7 +285,7 @@ pub(crate) mod tests {
             .with_string(CLAIM_SUB, "1234")
             .with_string(CLAIM_TENANT, "0815")
             .with_string(CLAIM_ACT, "sub1")
-            .build_user();
+            .build();
 
         assert_eq!(
             format!("{:?}", user),
@@ -258,7 +296,7 @@ pub(crate) mod tests {
             .with_string(CLAIM_SUB, "1234")
             .with_string(CLAIM_TENANT, "0815")
             .with_value(CLAIM_ACT, json!(42))
-            .build_user();
+            .build();
 
         assert_eq!(
             format!("{:?}", user),
@@ -272,7 +310,7 @@ pub(crate) mod tests {
             .with_string(CLAIM_SUB, "1234")
             .with_string(CLAIM_TENANT, "0815")
             .with_value(CLAIM_ACT, json!({"sub": "sub1", "tenant": "tenant2"}))
-            .build_user();
+            .build();
 
         assert_eq!(
             format!("{:?}", user),
@@ -286,7 +324,7 @@ pub(crate) mod tests {
             .with_string(CLAIM_SUB, "1234")
             .with_string(CLAIM_TENANT, "0815")
             .with_value(CLAIM_ACT, json!({"sub": "sub1", "act": {"sub": "sub2"}}))
-            .build_user();
+            .build();
 
         assert_eq!(
             format!("{:?}", user),
@@ -296,22 +334,41 @@ pub(crate) mod tests {
 
     #[test]
     fn user_tenant_id_returns_valid_tenant_id() {
-        let user = Builder::new()
-            .with_string(CLAIM_TENANT, "0815")
-            .build_user();
+        let user = Builder::new().with_string(CLAIM_TENANT, "0815").build();
 
         assert_eq!(user.tenant_id().unwrap(), "0815");
     }
 
     #[test]
     fn user_tenant_id_fails_for_missing_tenant_id() {
-        let user = Builder::new().build_user();
+        let user = Builder::new().build();
         assert!(user.tenant_id().is_err());
     }
 
     #[test]
+    fn user_issuer_returns_valid_issuer() {
+        let user = Builder::new()
+            .with_string(CLAIM_ISS, "https://issuer.example.com")
+            .build();
+
+        assert_eq!(user.issuer().unwrap(), "https://issuer.example.com");
+    }
+
+    #[test]
+    fn user_issuer_fails_for_missing_issuer() {
+        let user = Builder::new().build();
+        assert!(user.issuer().is_err());
+    }
+
+    #[test]
+    fn user_issuer_fails_for_empty_issuer() {
+        let user = Builder::new().with_string(CLAIM_ISS, "").build();
+        assert!(user.issuer().is_err());
+    }
+
+    #[test]
     fn user_tenant_id_fails_for_empty_tenant_id() {
-        let user = Builder::new().with_string(CLAIM_TENANT, "").build_user();
+        let user = Builder::new().with_string(CLAIM_TENANT, "").build();
         assert!(user.tenant_id().is_err());
     }
 
@@ -319,26 +376,26 @@ pub(crate) mod tests {
     fn user_tenant_id_fails_for_tenant_id_exceeding_max_length() {
         let user = Builder::new()
             .with_string(CLAIM_TENANT, "a".repeat(65).as_str())
-            .build_user();
+            .build();
         assert!(user.tenant_id().is_err());
     }
 
     #[test]
     fn user_user_id_returns_valid_user_id() {
-        let user = Builder::new().with_string(CLAIM_SUB, "1234").build_user();
+        let user = Builder::new().with_string(CLAIM_SUB, "1234").build();
 
         assert_eq!(user.user_id().unwrap(), "1234");
     }
 
     #[test]
     fn user_user_id_fails_for_missing_user_id() {
-        let user = Builder::new().build_user();
+        let user = Builder::new().build();
         assert!(user.user_id().is_err());
     }
 
     #[test]
     fn user_user_id_fails_for_empty_user_id() {
-        let user = Builder::new().with_string(CLAIM_SUB, "").build_user();
+        let user = Builder::new().with_string(CLAIM_SUB, "").build();
         assert!(user.user_id().is_err());
     }
 
@@ -346,28 +403,26 @@ pub(crate) mod tests {
     fn user_user_id_fails_for_user_id_exceeding_max_length() {
         let user = Builder::new()
             .with_string(CLAIM_SUB, "a".repeat(65).as_str())
-            .build_user();
+            .build();
         assert!(user.user_id().is_err());
     }
 
     #[test]
     fn user_full_name_returns_valid_name() {
-        let user = Builder::new()
-            .with_string(CLAIM_NAME, "John Doe")
-            .build_user();
+        let user = Builder::new().with_string(CLAIM_NAME, "John Doe").build();
 
         assert_eq!(user.full_name().unwrap(), "John Doe");
     }
 
     #[test]
     fn user_full_name_fails_for_missing_name() {
-        let user = Builder::new().build_user();
+        let user = Builder::new().build();
         assert!(user.full_name().is_err());
     }
 
     #[test]
     fn user_full_name_fails_for_empty_name() {
-        let user = Builder::new().with_string(CLAIM_NAME, "").build_user();
+        let user = Builder::new().with_string(CLAIM_NAME, "").build();
         assert!(user.full_name().is_err());
     }
 
@@ -375,7 +430,7 @@ pub(crate) mod tests {
     fn user_full_name_fails_for_name_exceeding_max_length() {
         let user = Builder::new()
             .with_string(CLAIM_NAME, "a".repeat(513).as_str())
-            .build_user();
+            .build();
         assert!(user.full_name().is_err());
     }
 
@@ -383,20 +438,20 @@ pub(crate) mod tests {
     fn user_email_returns_valid_email() {
         let user = Builder::new()
             .with_string(CLAIM_EMAIL, "auth@example.com")
-            .build_user();
+            .build();
 
         assert_eq!(user.email().unwrap(), "auth@example.com");
     }
 
     #[test]
     fn user_email_fails_for_missing_email() {
-        let user = Builder::new().build_user();
+        let user = Builder::new().build();
         assert!(user.email().is_err());
     }
 
     #[test]
     fn user_email_fails_for_empty_email() {
-        let user = Builder::new().with_string(CLAIM_EMAIL, "").build_user();
+        let user = Builder::new().with_string(CLAIM_EMAIL, "").build();
         assert!(user.email().is_err());
     }
 
@@ -404,7 +459,7 @@ pub(crate) mod tests {
     fn user_email_fails_for_email_exceeding_max_length() {
         let user = Builder::new()
             .with_string(CLAIM_EMAIL, "a".repeat(513).as_str())
-            .build_user();
+            .build();
         assert!(user.email().is_err());
     }
 
@@ -412,58 +467,58 @@ pub(crate) mod tests {
     fn user_has_permission_returns_true_if_user_has_permission() {
         let user = Builder::new()
             .with_value(CLAIM_PERMISSIONS, json!(["permission1", "permission2"]))
-            .build_user();
+            .build();
 
-        assert!(user.has_any_permission(&[&"permission1"]));
-        assert!(user.has_any_permission(&[&"permission2"]));
-        assert!(user.has_any_permission(&[&"permission1", &"permission2"]));
+        assert!(user.has_any_permission(&["permission1"]));
+        assert!(user.has_any_permission(&["permission2"]));
+        assert!(user.has_any_permission(&["permission1", "permission2"]));
     }
 
     #[test]
     fn user_has_permission_returns_false_if_user_does_not_have_permission() {
         let user = Builder::new()
             .with_value(CLAIM_PERMISSIONS, json!(["permission1", "permission2"]))
-            .build_user();
+            .build();
 
-        assert!(!user.has_any_permission(&[&"permission3"]));
-        assert!(!user.has_any_permission(&[&"permission4"]));
-        assert!(!user.has_any_permission(&[&"permission3", &"permission4"]));
+        assert!(!user.has_any_permission(&["permission3"]));
+        assert!(!user.has_any_permission(&["permission4"]));
+        assert!(!user.has_any_permission(&["permission3", "permission4"]));
     }
 
     #[test]
     fn user_has_permission_returns_false_if_no_permissions_claim_present() {
-        let user = Builder::new().build_user();
+        let user = Builder::new().build();
 
-        assert!(!user.has_any_permission(&[&"permission1"]));
+        assert!(!user.has_any_permission(&["permission1"]));
     }
 
     #[test]
     fn user_has_permission_returns_false_if_permissions_claim_is_not_an_array() {
         let user = Builder::new()
             .with_string(CLAIM_PERMISSIONS, "permission1")
-            .build_user();
+            .build();
 
-        assert!(!user.has_any_permission(&[&"permission1"]));
+        assert!(!user.has_any_permission(&["permission1"]));
     }
 
     #[test]
     fn user_enforce_permission_with_permission_succeeds() {
         let user = Builder::new()
             .with_value(CLAIM_PERMISSIONS, json!(["permission1", "permission2"]))
-            .build_user();
+            .build();
 
         assert!(
             user.clone()
-                .enforce_any_permission(&[&"permission1"])
+                .enforce_any_permission(&["permission1"])
                 .is_ok()
         );
         assert!(
             user.clone()
-                .enforce_any_permission(&[&"permission2"])
+                .enforce_any_permission(&["permission2"])
                 .is_ok()
         );
         assert!(
-            user.enforce_any_permission(&[&"permissionX", &"permission1"])
+            user.enforce_any_permission(&["permissionX", "permission1"])
                 .is_ok()
         );
     }
@@ -472,18 +527,18 @@ pub(crate) mod tests {
     fn user_enforce_permission_fails_if_permission_is_missing() {
         let user = Builder::new()
             .with_value(CLAIM_PERMISSIONS, json!(["permission1", "permission2"]))
-            .build_user();
+            .build();
 
         assert_eq!(
             user.clone()
-                .enforce_any_permission(&[&"permissionA"])
+                .enforce_any_permission(&["permissionA"])
                 .unwrap_err()
                 .to_string(),
             "The permission 'permissionA' is required for this action"
         );
 
         assert_eq!(
-            user.enforce_any_permission(&[&"permissionA", &"permissionB"])
+            user.enforce_any_permission(&["permissionA", "permissionB"])
                 .unwrap_err()
                 .to_string(),
             "One of the permissions 'permissionA, permissionB' is required for this action"

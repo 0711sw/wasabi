@@ -553,7 +553,7 @@ mod tests {
         assert_eq!(translated.get("tenant").unwrap(), &json!("abc"));
         assert_eq!(translated.get("role").unwrap(), &json!("admin"));
         assert_eq!(translated.get("sub").unwrap(), &json!("user123"));
-        assert!(translated.get("custom:tenant").is_none());
+        assert!(!translated.contains_key("custom:tenant"));
     }
 
     #[test]
@@ -1224,14 +1224,14 @@ mod tests {
     #[async_trait]
     impl KeyFetcher for MockKeyFetcher {
         async fn fetch(&self, header: &Header) -> anyhow::Result<Arc<DecodingKey>> {
-            if let Some(expected_kid) = &self.expected_kid {
-                if header.kid.as_ref() != Some(expected_kid) {
-                    anyhow::bail!(
-                        "Key ID mismatch: expected {}, got {:?}",
-                        expected_kid,
-                        header.kid
-                    );
-                }
+            if let Some(expected_kid) = &self.expected_kid
+                && header.kid.as_ref() != Some(expected_kid)
+            {
+                anyhow::bail!(
+                    "Key ID mismatch: expected {}, got {:?}",
+                    expected_kid,
+                    header.kid
+                );
             }
             Ok(self.key.clone())
         }
