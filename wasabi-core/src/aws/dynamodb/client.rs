@@ -56,7 +56,20 @@ impl DynamoClient {
     /// Returns an error if `DYNAMO_TABLE_PREFIX` is not set.
     pub async fn from_env() -> anyhow::Result<DynamoClient> {
         tracing::info!("Setting up DynamoDB....");
-        let config = aws_config::load_from_env().await;
+
+        // DynamoDB operations are transactional and typically complete in
+        // <100ms. Setting tight per-attempt and total timeouts ensures a
+        // stuck request cannot cascade into request-handler stalls.
+        let timeout_config = aws_config::timeout::TimeoutConfig::builder()
+            .connect_timeout(Duration::from_secs(3))
+            .operation_attempt_timeout(Duration::from_secs(5))
+            .operation_timeout(Duration::from_secs(15))
+            .build();
+
+        let config = aws_config::defaults(aws_config::BehaviorVersion::latest())
+            .timeout_config(timeout_config)
+            .load()
+            .await;
         let client = Client::new(&config);
 
         let table_prefix = env::var("DYNAMO_TABLE_PREFIX")
