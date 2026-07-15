@@ -19,7 +19,7 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Cache Cargo registry and build
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -42,4 +42,9 @@ jobs:
         run: cargo test --all-features
 
       - name: Run audit
-        run: cargo audit
+        # RUSTSEC-2026-0194 (quick-xml quadratic runtime on duplicate attributes)
+        # RUSTSEC-2026-0195 (quick-xml unbounded namespace allocation)
+        # Both are transitive via typst → citationberg → quick-xml 0.38.4. Only
+        # exploitable when parsing untrusted XML, which we do not. Waiting on
+        # typst to bump quick-xml to >=0.41.
+        run: cargo audit --ignore RUSTSEC-2026-0194 --ignore RUSTSEC-2026-0195
