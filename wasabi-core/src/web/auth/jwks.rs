@@ -1,7 +1,8 @@
 //! JWKS (JSON Web Key Set) fetching and caching.
 //!
-//! Caches keys for 5 minutes, with a minimum 10-second cooldown between fetches
-//! to prevent hammering the JWKS endpoint on key rotation.
+//! Caches keys with a minimum cooldown between fetches to prevent hammering
+//! the JWKS endpoint on key rotation. See `MAX_CACHE_TTL_SECONDS` and
+//! `MIN_WAIT_BETWEEN_LOADS_SECONDS` for the actual values.
 
 use anyhow::{Context, bail};
 use arc_swap::ArcSwapOption;
@@ -10,12 +11,21 @@ use jsonwebtoken::DecodingKey;
 use jwks::Jwks;
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 
 #[cfg(test)]
 use mock_instant::global::SystemTime;
 use reqwest::Client;
 #[cfg(not(test))]
 use std::time::SystemTime;
+
+/// Timeouts for JWKS HTTP fetches.
+///
+/// Generous enough to tolerate slow identity-provider responses under load,
+/// but bounded so a hanging IdP can never cause the request handler to
+/// stall past CloudFront's default 30s origin-response timeout.
+const JWKS_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+const JWKS_TOTAL_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Maps key IDs (kid) to their corresponding decoding keys.
 pub(crate) type KeyCache = HashMap<String, Arc<DecodingKey>>;
@@ -35,6 +45,7 @@ pub(crate) trait JwksFetcher: Send + Sync {
 /// that publish their public keys via a JWKS endpoint.
 pub struct UrlJwksFetcher {
     url: String,
+    client: Client,
 }
 
 #[async_trait]
@@ -44,7 +55,10 @@ impl JwksFetcher for UrlJwksFetcher {
         // Note that we pass a custom client in here, so that our dependency "reqwest"
         // is actually marked as used. We need this dependency to activate "rustls-tls" as
         // feature, as JWKS itself has all default features turned off...
-        let jwks = Jwks::from_jwks_url_with_client(&Client::default(), &self.url)
+        //
+        // The client carries explicit timeouts so a slow / stuck identity
+        // provider cannot hang the request handler indefinitely.
+        let jwks = Jwks::from_jwks_url_with_client(&self.client, &self.url)
             .await
             .with_context(|| format!("Failed to fetch JWKS from: {}", self.url))?;
 
@@ -60,13 +74,28 @@ impl JwksFetcher for UrlJwksFetcher {
 
 impl UrlJwksFetcher {
     /// Creates a new JWKS fetcher for the given URL.
+    ///
+    /// The reqwest builder is only fallible when the TLS backend can't be
+    /// initialized — a catastrophic startup condition — so a panic here is
+    /// preferable to threading a Result through every caller.
+    #[allow(clippy::expect_used)]
     pub(crate) fn new(url: String) -> Self {
-        Self { url }
+        let client = Client::builder()
+            .connect_timeout(JWKS_CONNECT_TIMEOUT)
+            .timeout(JWKS_TOTAL_TIMEOUT)
+            .build()
+            .expect("Failed to build JWKS HTTP client with fixed timeouts");
+        Self { url, client }
     }
 }
 
 /// Maximum time to cache keys before forcing a refresh.
-const MAX_CACHE_TTL_SECONDS: u64 = 5 * 60;
+///
+/// JWKS signing keys rotate rarely (typically weeks to months at most
+/// providers), so a long TTL is safe. Unknown-kid lookups still trigger
+/// an immediate refetch (gated only by `MIN_WAIT_BETWEEN_LOADS_SECONDS`),
+/// so genuine rotations are picked up within seconds regardless of TTL.
+const MAX_CACHE_TTL_SECONDS: u64 = 30 * 60;
 
 /// Minimum time between fetch attempts to prevent hammering the endpoint.
 const MIN_WAIT_BETWEEN_LOADS_SECONDS: u64 = 10;
@@ -76,9 +105,9 @@ const NOT_YET_LOADED: u64 = 0;
 
 /// Caching layer for JWKS keys with automatic refresh.
 ///
-/// Keys are cached for up to 5 minutes. When a requested key is not found,
-/// the cache will attempt to refresh (respecting a 10-second cooldown) to
-/// handle key rotation scenarios.
+/// Keys are cached for up to `MAX_CACHE_TTL_SECONDS`. When a requested key
+/// is not found, the cache will attempt to refresh (respecting the
+/// `MIN_WAIT_BETWEEN_LOADS_SECONDS` cooldown) to handle key rotation.
 pub(crate) struct JwksCache {
     fetcher: Box<dyn JwksFetcher>,
     last_load: ArcSwapOption<SystemTime>,
@@ -129,12 +158,6 @@ impl JwksCache {
                 .inspect_err(|_| self.cached_keys.store(None))?;
             cached_keys = Some(Arc::new(keys));
             self.cached_keys.store(cached_keys.clone());
-            if let Some(keys) = cached_keys.as_ref() {
-                tracing::info!(
-                    loaded_kids = ?keys.keys().collect::<Vec<_>>(),
-                    "JWKS refreshed"
-                );
-            }
         }
 
         if let Some(keys) = cached_keys {
