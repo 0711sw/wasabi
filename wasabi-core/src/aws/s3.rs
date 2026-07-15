@@ -39,9 +39,7 @@ use futures_util::TryStreamExt;
 use std::env;
 use std::fmt::{Debug, Display};
 use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
-use std::sync::atomic::Ordering;
-use tokio::sync::Notify;
+use tokio::sync::Mutex;
 use tokio::sync::RwLock;
 use tokio::time::Duration;
 use tokio::time::Instant;
@@ -145,9 +143,25 @@ pub struct S3CachedObject {
     bucket: BucketName,
     object_key: String,
     state: RwLock<S3CachedObjectState>,
-    fetching: AtomicBool,
-    notify: Notify,
+    /// Serializes concurrent refreshes so only one task hits S3 at a time.
+    /// Cancellation-safe: dropped on panic/cancel, releasing the next waiter.
+    fetch_lock: Mutex<()>,
 }
+
+/// Maximum time a waiter blocks trying to acquire the refresh lock before
+/// giving up with an explicit error (as opposed to hanging until CloudFront
+/// times out with 504). Chosen strictly greater than the sum of the interior
+/// S3 timeouts so a legitimate in-flight fetch always wins its own bound.
+const FETCH_LOCK_TIMEOUT: Duration = Duration::from_secs(25);
+
+/// Maximum wall-clock time for a single S3 GetObject on a cached object.
+/// Bound is generous enough for slow-response tails but keeps a runaway
+/// call from monopolising the fetch lock.
+const FETCH_S3_GET_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// Maximum wall-clock time for a single S3 HeadObject (ETag probe).
+/// HEAD is cheap, so we set this tighter than GET.
+const FETCH_S3_HEAD_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Internal cache state.
 struct S3CachedObjectState {
@@ -167,7 +181,19 @@ impl S3Client {
     /// Returns an error if `S3_BUCKET_SUFFIX` is not set.
     pub async fn from_env() -> anyhow::Result<S3Client> {
         tracing::info!("Setting up S3....");
-        let config = aws_config::load_from_env().await;
+
+        // Only set connect_timeout globally. Per-operation timeouts are applied
+        // locally at call sites (e.g. S3CachedObject) via tokio::time::timeout,
+        // so that latency-sensitive small reads have tight bounds while large
+        // uploads elsewhere in the codebase stay unaffected.
+        let timeout_config = aws_config::timeout::TimeoutConfig::builder()
+            .connect_timeout(Duration::from_secs(5))
+            .build();
+
+        let config = aws_config::defaults(aws_config::BehaviorVersion::latest())
+            .timeout_config(timeout_config)
+            .load()
+            .await;
 
         let s3_config = config::Builder::from(&config)
             .force_path_style(true)
@@ -527,8 +553,7 @@ impl S3Client {
                 last_fetched: Instant::now(),
             }),
             minimum_cache_duration,
-            fetching: AtomicBool::new(false),
-            notify: Notify::new(),
+            fetch_lock: Mutex::new(()),
         })
     }
 }
@@ -552,18 +577,27 @@ impl CachedObject for S3CachedObject {
 
     #[tracing::instrument(level = "debug", err(Display))]
     async fn fetch(&self) -> anyhow::Result<Arc<Vec<u8>>> {
-        if self.fetching.swap(true, Ordering::SeqCst) {
-            self.notify.notified().await;
+        let arrival = Instant::now();
 
-            let state = self.state.read().await;
-            if let Some(content) = &state.content {
-                return Ok(content.clone());
-            } else {
-                anyhow::bail!(
-                    "Waited for another task to fetch {} from S3 bucket {}, but it failed",
+        let _guard = tokio::time::timeout(FETCH_LOCK_TIMEOUT, self.fetch_lock.lock())
+            .await
+            .with_context(|| {
+                format!(
+                    "Timed out after {}s waiting for fetch lock on '{}' in bucket '{}'",
+                    FETCH_LOCK_TIMEOUT.as_secs(),
                     self.object_key,
-                    self.bucket
-                );
+                    self.bucket,
+                )
+            })?;
+
+        // Double-check: another task may have refreshed while we waited.
+        // Only reuse the cache if it was populated *after* our arrival.
+        {
+            let state = self.state.read().await;
+            if let Some(content) = &state.content
+                && state.last_fetched >= arrival
+            {
+                return Ok(content.clone());
             }
         }
 
@@ -599,9 +633,6 @@ impl S3CachedObject {
         state.etag = next_etag;
         state.content = content;
         state.last_fetched = Instant::now();
-
-        self.fetching.store(false, Ordering::SeqCst);
-        self.notify.notify_waiters();
 
         if let Some(content) = &state.content {
             Ok(content.clone())
@@ -639,14 +670,26 @@ impl S3CachedObject {
     async fn fetch_etag_from_s3(&self) -> String {
         let effective_bucket = self.client.effective_name(&self.bucket);
 
-        let result = self
+        let send = self
             .client
             .client
             .head_object()
             .bucket(effective_bucket)
             .key(&self.object_key)
-            .send()
-            .await;
+            .send();
+
+        let result = match tokio::time::timeout(FETCH_S3_HEAD_TIMEOUT, send).await {
+            Ok(inner) => inner,
+            Err(_) => {
+                tracing::error!(
+                    object_key = %self.object_key,
+                    bucket = %self.bucket,
+                    timeout_secs = FETCH_S3_HEAD_TIMEOUT.as_secs(),
+                    "Timed out probing ETag of object in S3"
+                );
+                return String::new();
+            }
+        };
 
         match result {
             Ok(result) => result.e_tag.unwrap_or_default(),
@@ -667,27 +710,45 @@ impl S3CachedObject {
     async fn fetch_from_s3(&self) -> (Option<Arc<Vec<u8>>>, String) {
         let effective_bucket = self.client.effective_name(&self.bucket);
 
-        let result = self
-            .client
-            .client
-            .get_object()
-            .bucket(effective_bucket)
-            .key(&self.object_key)
-            .send()
-            .await;
+        // Timeout covers both the SDK send() and the body collect() so a
+        // hanging body stream can't outlive the bound.
+        let fetch = async {
+            let response = self
+                .client
+                .client
+                .get_object()
+                .bucket(effective_bucket)
+                .key(&self.object_key)
+                .send()
+                .await
+                .context("S3 get_object failed")?;
+
+            let etag = response.e_tag().unwrap_or_default().to_owned();
+            let data = response
+                .body
+                .collect()
+                .await
+                .map(AggregatedBytes::to_vec)
+                .unwrap_or_default();
+
+            anyhow::Ok((data, etag))
+        };
+
+        let result = match tokio::time::timeout(FETCH_S3_GET_TIMEOUT, fetch).await {
+            Ok(inner) => inner,
+            Err(_) => {
+                tracing::error!(
+                    object_key = %self.object_key,
+                    bucket = %self.bucket,
+                    timeout_secs = FETCH_S3_GET_TIMEOUT.as_secs(),
+                    "Timed out fetching object from S3"
+                );
+                return (None, String::new());
+            }
+        };
 
         match result {
-            Ok(result) => {
-                let etag = result.e_tag().unwrap_or_default().to_owned();
-                let data = result
-                    .body
-                    .collect()
-                    .await
-                    .map(AggregatedBytes::to_vec)
-                    .unwrap_or_default();
-
-                (Some(Arc::new(data)), etag)
-            }
+            Ok((data, etag)) => (Some(Arc::new(data)), etag),
             Err(err) => {
                 tracing::error!(
                     "Failed to read object '{}' from bucket '{}': {:#}",
