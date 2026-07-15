@@ -1,10 +1,25 @@
 //! Resolver functions for custom URI schemes used in Typst templates.
 
 use std::path::Path;
+use std::sync::LazyLock;
+use std::time::Duration;
 
 use typst::foundations::Bytes;
 
 use super::error::PdfError;
+
+/// Blocking HTTP client used from Typst's synchronous World callback.
+///
+/// Timeouts are bounded so a slow/dead remote resource can't stall the
+/// PDF render (which would block the tokio worker running the render).
+static HTTPS_CLIENT: LazyLock<reqwest::blocking::Client> = LazyLock::new(|| {
+    #[allow(clippy::expect_used)]
+    reqwest::blocking::Client::builder()
+        .connect_timeout(Duration::from_secs(5))
+        .timeout(Duration::from_secs(15))
+        .build()
+        .expect("Failed to build blocking HTTPS client with fixed timeouts")
+});
 
 /// Serialize injected JSON data to bytes.
 /// Used for the `data://` scheme — returns the same result regardless of path.
@@ -54,7 +69,7 @@ pub fn resolve_ean(code: &str) -> Result<Bytes, PdfError> {
 /// Fetch a resource over HTTPS. Uses blocking reqwest since this runs
 /// inside typst's synchronous `World::file()` callback.
 pub fn resolve_https(url: &str) -> Result<Bytes, PdfError> {
-    let response = reqwest::blocking::get(url).map_err(|e| PdfError::Fetch {
+    let response = HTTPS_CLIENT.get(url).send().map_err(|e| PdfError::Fetch {
         url: url.to_string(),
         source: e,
     })?;
