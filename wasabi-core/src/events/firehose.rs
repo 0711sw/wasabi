@@ -43,6 +43,12 @@ const AUTOMATIC_FLUSH_SIZE: usize = 64;
 /// Firehose API limit for PutRecordBatch.
 const MAX_EVENTS_PER_UPLOAD: usize = 256;
 
+/// Bound on a single PutRecordBatch call. If Firehose stalls, we must not
+/// let the background loop wedge — a wedged loop stops draining the buffer,
+/// which then makes every `record_event()` caller block (turning telemetry
+/// backpressure into an application-wide hang).
+const PUT_RECORD_BATCH_TIMEOUT: Duration = Duration::from_secs(30);
+
 /// Envelope that wraps events with metadata before sending to Firehose.
 #[derive(Serialize)]
 struct EventWrapper<'a, T: Event + Serialize> {
@@ -81,7 +87,20 @@ impl FirehoseEventRecorder {
     /// - `FIREHOSE_SYSTEM_NAME` - System identifier in event metadata (defaults to normalized `CLUSTER_ID`)
     #[tracing::instrument(err(Display))]
     pub async fn from_env() -> anyhow::Result<Self> {
-        let config = aws_config::load_from_env().await;
+        // Bound the Firehose SDK independently so the timeout on
+        // PutRecordBatch is enforced by both the tokio wrapper and the
+        // AWS SDK. Firehose is telemetry — we favour dropping records
+        // over ever blocking the flush loop.
+        let timeout_config = aws_config::timeout::TimeoutConfig::builder()
+            .connect_timeout(Duration::from_secs(3))
+            .operation_attempt_timeout(Duration::from_secs(10))
+            .operation_timeout(Duration::from_secs(30))
+            .build();
+
+        let config = aws_config::defaults(aws_config::BehaviorVersion::latest())
+            .timeout_config(timeout_config)
+            .load()
+            .await;
         let client = Client::new(&config);
 
         let stream = env::var("FIREHOSE_STREAM_NAME").unwrap_or_else(|_| {
@@ -111,9 +130,22 @@ impl FirehoseEventRecorder {
 
     async fn record_event<'a, E: Event>(&self, event: EventWrapper<'a, E>) -> anyhow::Result<()> {
         let json = serde_json::to_string(&event)?;
-        self.tx.send(json).await?;
 
-        Ok(())
+        // Use try_send: telemetry must never block business logic. If the
+        // consumer is stuck (Firehose down, network wedged), events are
+        // dropped and logged rather than propagating backpressure into
+        // every handler.
+        match self.tx.try_send(json) {
+            Ok(()) => Ok(()),
+            Err(mpsc::error::TrySendError::Full(_)) => {
+                tracing::warn!(
+                    buffer_capacity = EVENT_BUFFER_SIZE,
+                    "Firehose event buffer full, dropping event",
+                );
+                Ok(())
+            }
+            Err(err @ mpsc::error::TrySendError::Closed(_)) => Err(err.into()),
+        }
     }
 }
 
@@ -164,13 +196,22 @@ async fn flush_chunk(
     client: &Client,
     stream: &str,
     chunk: &[Record],
-) -> Result<PutRecordBatchOutput, SdkError<PutRecordBatchError, HttpResponse>> {
-    client
+) -> anyhow::Result<PutRecordBatchOutput> {
+    let send = client
         .put_record_batch()
         .delivery_stream_name(stream)
         .set_records(Some(chunk.into()))
-        .send()
-        .await
+        .send();
+
+    match tokio::time::timeout(PUT_RECORD_BATCH_TIMEOUT, send).await {
+        Ok(inner) => {
+            inner.map_err(|err: SdkError<PutRecordBatchError, HttpResponse>| anyhow::anyhow!(err))
+        }
+        Err(_) => Err(anyhow::anyhow!(
+            "Timed out after {}s calling Firehose PutRecordBatch",
+            PUT_RECORD_BATCH_TIMEOUT.as_secs()
+        )),
+    }
 }
 
 #[async_trait]
