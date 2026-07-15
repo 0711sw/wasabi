@@ -29,7 +29,16 @@ use serde::Deserialize;
 use serde_json::json;
 use std::future::Future;
 use std::pin::Pin;
+use std::time::Duration;
 use warp::sse::Event;
+
+/// Bound on how long we wait for the next event from a Bedrock ConverseStream.
+///
+/// Bedrock streams keep chunks flowing frequently, so this many seconds of
+/// silence indicates the stream is stuck. We surface an error instead of
+/// blocking forever — otherwise SSE clients see the connection hang until
+/// CloudFront kills it with a 504.
+const STREAM_RECV_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Convert serde_json::Value to aws_smithy_types::Document.
 fn json_value_to_document(value: serde_json::Value) -> Document {
@@ -260,7 +269,16 @@ type Receiver = EventReceiver<ConverseStreamOutput, ConverseStreamOutputError>;
 /// Loops internally to skip non-content events, returning only meaningful events.
 pub async fn read_next_event(receiver: &mut Receiver) -> Result<ModelEvent, String> {
     loop {
-        match receiver.recv().await {
+        let received = match tokio::time::timeout(STREAM_RECV_TIMEOUT, receiver.recv()).await {
+            Ok(res) => res,
+            Err(_) => {
+                return Err(format!(
+                    "Bedrock stream idle for {}s, aborting",
+                    STREAM_RECV_TIMEOUT.as_secs()
+                ));
+            }
+        };
+        match received {
             Ok(Some(output)) => match output {
                 ConverseStreamOutput::ContentBlockDelta(delta) => {
                     if let Some(delta) = delta.delta()
@@ -300,7 +318,16 @@ async fn read_tool_use(
 ) -> Result<ToolUse, String> {
     let mut input = String::new();
     loop {
-        match receiver.recv().await {
+        let received = match tokio::time::timeout(STREAM_RECV_TIMEOUT, receiver.recv()).await {
+            Ok(res) => res,
+            Err(_) => {
+                return Err(format!(
+                    "Bedrock stream idle for {}s while reading tool use, aborting",
+                    STREAM_RECV_TIMEOUT.as_secs()
+                ));
+            }
+        };
+        match received {
             Ok(Some(output)) => match output {
                 ConverseStreamOutput::ContentBlockDelta(delta) => {
                     if let Some(delta) = delta.delta()
